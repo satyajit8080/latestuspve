@@ -67,7 +67,7 @@ async function pollAuth() { const r = await api('/auth/status'); if (r.ok && r.d
 async function pollResolve() { const r = await api('/api/journal/resolve/status'); if (r.ok && r.data) { const was = state.resolve.running; state.resolve = r.data; emit('resolve'); if (was && !r.data.running) toast(r.data.lastOk ? `Outcomes resolved: ${r.data.message || ''}` : `Resolve failed: ${r.data.message || ''}`, r.data.lastOk ? '' : 'err'); } }
 
 async function runScan() {
-  const r = await api('/api/scan/run', { method: 'POST', body: { limit: 600 } });
+  const r = await api('/api/scan/run', { method: 'POST', body: { limit: 1000 } });
   if (r.status === 409) return toast('A scan is already running', 'warn');
   if (!r.ok || !r.data || !r.data.ok) return toast(`Could not start the scan: ${(r.data && (r.data.error || r.data.reason)) || 'error'}`, 'err');
   state.scan = { ...state.scan, ...r.data.state, running: true }; emit('scan'); poller && poller.nudge('scan');

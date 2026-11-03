@@ -211,7 +211,7 @@ const SCAN_STATE = { running: false, startedAt: null, finishedAt: null, lastOk: 
 app.post('/api/scan/run', requireAuth, (req, res) => {
   if (OPT_PROVIDER.name === 'null') return res.status(400).json({ ok: false, error: 'No options provider configured', reason: OPT_PROVIDER.reason || null });
   if (SCAN_STATE.running) return res.status(409).json({ ok: false, error: 'A scan is already running', state: SCAN_STATE });
-  const limit = Math.max(1, Math.min(600, Number(req.body && req.body.limit) || Number(process.env.SCAN_LIMIT) || 600));
+  const limit = Math.max(1, Math.min(1000, Number(req.body && req.body.limit) || Number(process.env.SCAN_LIMIT) || 600));
   const script = path.join(__dirname, 'research', 'scan-universe.js');
   if (!fs.existsSync(script)) return res.status(500).json({ ok: false, error: 'scan-universe.js not found' });
   SCAN_STATE.running = true; SCAN_STATE.done = null; SCAN_STATE.total = null; SCAN_STATE.etaMs = null; SCAN_STATE.startedAt = new Date().toISOString(); SCAN_STATE.finishedAt = null; SCAN_STATE.lastOk = null; SCAN_STATE.message = 'running'; SCAN_STATE.limit = limit;

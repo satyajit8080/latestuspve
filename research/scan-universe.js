@@ -66,7 +66,7 @@ export async function computeRow(P, ticker, opt) {
 export async function main() {
   const key = process.env.UNUSUAL_WHALES_API_TOKEN;
   const dir = process.env.SCAN_DIR || path.join(ROOT, 'research-data', 'scan');
-  const limit = Math.max(1, Math.min(600, Number(process.env.SCAN_LIMIT || 600)));   // universe size per run: top 600 by the UW screener
+  const limit = Math.max(1, Math.min(1000, Number(process.env.SCAN_LIMIT || 600)));   // universe size per run: top 600 by the UW screener
   const gap = Number(process.env.SCAN_GAP_MS || 100);
   if (!key) { console.error('UNUSUAL_WHALES_API_TOKEN required.'); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
