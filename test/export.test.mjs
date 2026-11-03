@@ -37,3 +37,14 @@ test('journal.csv and journal.json carry the saved rows', async () => {
   assert.match(csv[0], /^id,ticker,firedAt,dir,score,rawScore,gated,gateReasons/); assert.match(csv[1], /^NVDA:1,NVDA,2026-11-03T16:00:00Z,bull,70,,false,OUTSIDE_RTH/);
   const j = await (await fetch(B + '/api/export/journal.json', { headers: { cookie } })).json(); assert.equal(j.length, 1); assert.equal(j[0].ticker, 'NVDA');
 });
+
+import { parseDirectory, sample } from '../scripts/make-universe.mjs';
+test('universe builder: drops test issues, footer and non-plain symbols; sampling is unique and bounded', () => {
+  const nasdaq = 'Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nAAPL|Apple|Q|N|N|100|N|N\nZZZT|Test|G|Y|N|100|N|N\nABCDW|Warrant|S|N|N|100|N|N\nQQQ|Invesco|G|N|N|100|Y|N\nFile Creation Time: 1103202610:00|||||||';
+  assert.deepEqual(parseDirectory(nasdaq), ['AAPL', 'QQQ']);
+  assert.deepEqual(parseDirectory(nasdaq, { etf: false }), ['AAPL']);
+  const other = 'ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\nIBM|IBM|N|IBM|N|100|N|IBM\nBRK.B|Berkshire|N|BRK.B|N|100|N|BRK.B';
+  assert.deepEqual(parseDirectory(other), ['IBM']);
+  const s = sample(['A', 'B', 'C', 'D', 'A'], 3); assert.equal(s.length, 3); assert.equal(new Set(s).size, 3);
+  assert.equal(sample(['A', 'B'], 10).length, 2);
+});
