@@ -44,3 +44,26 @@ test('concurrent identical calls still share one request chain', async () => {
   });
   assert.equal(n, 1);
 });
+
+test('a full per-minute window WAITS and then succeeds; it does not fail the call (bulk scans used to stop after ~15 tickers)', async () => {
+  const lim = new RateLimiter({ maxPerMinute: 2 });
+  let t = Date.now(); lim.canRequest = ((orig) => (now) => orig.call(lim, now ?? t))(lim.canRequest);
+  const p = new UnusualWhalesOptionsProvider({ apiKey: 'k', limiter: lim });
+  let calls = 0;
+  await withFetch(async () => { calls++; return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ data: calls }) }; }, async () => {
+    lim.record(); lim.record();                                   // window already full
+    // make the window free up shortly: pretend the oldest requests are a minute old
+    setTimeout(() => { lim.window.length = 0; }, 400);
+    const r = await bounded(p._get('/x'), 10000);
+    assert.equal(r.data, 1);
+  });
+});
+
+test('a window-full refusal is not counted as quota exhaustion (no rateLimited flag)', async () => {
+  const lim = new RateLimiter({ maxPerMinute: 1, maxPerScan: 1 });
+  const p = new UnusualWhalesOptionsProvider({ apiKey: 'k', limiter: lim });
+  await withFetch(async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }), async () => {
+    await p._get('/a');                                            // uses the whole scan budget
+    await assert.rejects(bounded(p._get('/b')), (e) => e.rateLimited === true && /SCAN_BUDGET/.test(e.message));   // budget exhaustion IS a hard stop
+  });
+});

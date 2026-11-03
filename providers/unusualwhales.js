@@ -37,12 +37,15 @@ export class UnusualWhalesOptionsProvider {
     const limiter = this.limiter;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const run = async () => {
+      let waited = 0;
       for (let attempt = 0; ; attempt++) {
         if (limiter) {
           const gate = limiter.canRequest();
           if (!gate.ok) {
-            if (gate.reason === 'RATE_WINDOW_FULL' && attempt < maxAttempts) { await sleep(Math.min(gate.retryAfterMs || 1000, 5000)); continue; }
-            const err = new Error(`UW request refused: ${gate.reason}`); err.rateLimited = true; throw err;
+            // A full per-minute window is NOT an error: wait until it frees (up to ~2 min total) instead of failing the call.
+            // Failing here made bulk scans stop after ~15 tickers, because 5 'rate limited' failures abort a scan.
+            if (gate.reason === 'RATE_WINDOW_FULL' && waited < 120000) { const w = Math.min(Math.max(gate.retryAfterMs || 1000, 250), 5000); waited += w; await sleep(w); attempt = Math.max(0, attempt - 1); continue; }
+            const err = new Error(`UW request refused: ${gate.reason}`); err.rateLimited = gate.reason !== 'RATE_WINDOW_FULL'; throw err;
           }
           limiter.record();
         }

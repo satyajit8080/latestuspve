@@ -100,7 +100,7 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   let c = null; try { c = await P.getChain(ticker, { limit: 250 }); } catch (e) { c = { available: false, error: e.message }; }
   const chain = c && c.chain;
   if (!chain || !Array.isArray(chain.contracts) || chain.contracts.length === 0) {
-    const rl = c && c.error && /quota exhausted|429|REFUSED/i.test(String(c.error));
+    const rl = c && c.error && /quota exhausted|SCAN_BUDGET/i.test(String(c.error));
     return { ok: false, status: 'UNAVAILABLE', reason: c && c.error ? 'UW_REQUEST_FAILED' : 'UW_NO_CONTRACTS', rateLimited: !!rl,
       detail: c && c.error ? String(c.error).slice(0, 200) : 'UW returned no option contracts for this ticker', signal: null, chain: null };
   }

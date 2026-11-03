@@ -117,7 +117,7 @@ export async function main() {
       catch (e) {
         rows.push({ ticker: t, error: e.message }); skipped++;
         // If UW says the quota is gone, stop early and keep what we have rather than grinding through guaranteed failures.
-        if (e && (e.rateLimited || /quota exhausted|429/i.test(String(e.message)))) { rateLimited++; if (rateLimited >= 5) { stop = true; console.error(`stopping early after ${done + 1}/${tickers.length}: UW quota exhausted`); } }
+        if (e && (e.rateLimited || /quota exhausted|SCAN_BUDGET/i.test(String(e.message)))) { rateLimited++; if (rateLimited >= 5) { stop = true; console.error(`stopping early after ${done + 1}/${tickers.length}: UW quota exhausted`); } }
       }
       done++;
       if (done % 5 === 0 || done === tickers.length) {
