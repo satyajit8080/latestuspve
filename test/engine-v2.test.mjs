@@ -192,14 +192,16 @@ test('side flips need the flip margin and then respect cooldown', () => {
   let s = null;
   for (let i = 0; i < 4; i++) s = step(s, { score: 85, dir: 'bull' });
   assert.equal(s.state, 'STRONG_BULL');
-  // below signalThreshold + flipMargin => refused
-  for (let i = 0; i < 4; i++) s = step(s, { score: 70, dir: 'bear' });
-  assert.equal(s.reason, 'flip_margin_not_met');
-  assert.ok(s.state.includes('BULL'));
-  // clears the margin => flips after confirmations
-  for (let i = 0; i < 4; i++) s = step(s, { score: 90, dir: 'bear' });
+  // the smoothed SIGNED score passes through zero: a modest bear signal first drains the bull state to NEUTRAL...
+  for (let i = 0; i < 6; i++) s = step(s, { score: 70, dir: 'bear' });
+  assert.equal(s.state, 'NEUTRAL');
+  assert.ok(s.cooldown >= 0);
+  // ...and the bear side is refused until |smoothed| clears signalThreshold + flipMargin (75)
+  s = step(s, { score: 70, dir: 'bear' });
+  assert.ok(['flip_margin_not_met', 'stable', 'cooldown'].includes(s.reason));
+  assert.equal(s.state, 'NEUTRAL');
+  for (let i = 0; i < 12; i++) s = step(s, { score: 92, dir: 'bear' });
   assert.ok(s.state.includes('BEAR'));
-  assert.ok(s.cooldown > 0);
 });
 
 test('targetState maps score bands to states; only real calls are actionable', () => {

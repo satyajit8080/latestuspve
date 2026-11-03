@@ -5,11 +5,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { etDate } from '../lib/time.js';
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const r4 = (x) => (isNum(x) ? Math.round(x * 10000) / 10000 : null);
 
-export const MIN_HISTORY = 10;          // below this, features report null + insufficient_history
+export const MIN_HISTORY = 10;          // distinct SESSIONS (not polls); below this, features report null + insufficient_history
 export const MAX_HISTORY = 60;          // ~60 trading days per spec
 
 export function baselineDir() {
@@ -70,19 +71,32 @@ export class BaselineStore {
         const o = JSON.parse(t);
         if (!o || !o.k || !isNum(o.v)) continue;
         if (!map.has(o.k)) map.set(o.k, []);
-        map.get(o.k).push({ v: o.v, at: o.at });
+        map.get(o.k).push({ v: o.v, at: o.at, d: o.d || etDate(Date.parse(o.at)) });
       } catch { /* skip malformed */ }
     }
-    for (const [k, arr] of map) { arr.sort((a, b) => String(a.at).localeCompare(String(b.at))); map.set(k, arr.slice(-MAX_HISTORY)); }
+    for (const [k, arr] of map) { arr.sort((a, b) => String(a.at).localeCompare(String(b.at))); map.set(k, arr); }
     this.cache = map;
     return map;
   }
 
-  // History strictly BEFORE `before` (ISO string) — this is what prevents look-ahead.
+  // One observation per SESSION: repeated polls inside one ET session would otherwise dominate the baseline and make
+  // `n` count polls, not days. The LATEST poll of each session wins. Strictly before `before` (look-ahead guard) and
+  // never the current session itself (today's polls are the thing being measured, not its own baseline).
+  _sessions(k, before = null) {
+    const arr = this.load().get(k) || [];
+    const curDay = before ? etDate(Date.parse(before)) : null;
+    const byDay = new Map();
+    for (const x of arr) {
+      if (before && !(String(x.at) < String(before))) continue;
+      if (curDay && x.d === curDay) continue;
+      byDay.set(x.d, x);                       // arr is chronological: the latest of each session overwrites
+    }
+    return [...byDay.values()].sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-MAX_HISTORY);
+  }
+
+  // History (one value per prior session) for ticker x bucket x feature.
   history(ticker, bucket, feature, before = null) {
-    const arr = this.load().get(key(ticker, bucket, feature)) || [];
-    const cut = before ? arr.filter((x) => String(x.at) < String(before)) : arr;
-    return cut.map((x) => x.v);
+    return this._sessions(key(ticker, bucket, feature), before).map((x) => x.v);
   }
 
   // Normalize a value against the ticker's own prior same-time-of-day distribution.
@@ -98,8 +112,9 @@ export class BaselineStore {
     const k = key(ticker, bucket, feature);
     const at_ = new Date(at).toISOString();
     await fs.promises.mkdir(this.dir, { recursive: true });
-    await fs.promises.appendFile(this._file(), JSON.stringify({ k, v: value, at: at_ }) + '\n');
-    if (this.cache) { if (!this.cache.has(k)) this.cache.set(k, []); this.cache.get(k).push({ v: value, at: at_ }); }
+    const d = etDate(Date.parse(at_));
+    await fs.promises.appendFile(this._file(), JSON.stringify({ k, v: value, at: at_, d }) + '\n');
+    if (this.cache) { if (!this.cache.has(k)) this.cache.set(k, []); this.cache.get(k).push({ v: value, at: at_, d }); }
     return true;
   }
 
@@ -113,8 +128,8 @@ export class BaselineStore {
 
   stats() {
     const m = this.load();
-    let obs = 0; for (const arr of m.values()) obs += arr.length;
-    return { keys: m.size, observations: obs, file: this._file() };
+    let obs = 0, sessions = 0; for (const [k, arr] of m) { obs += arr.length; sessions += new Set(arr.map((x) => x.d)).size; }
+    return { keys: m.size, observations: obs, sessions, file: this._file() };
   }
 }
 

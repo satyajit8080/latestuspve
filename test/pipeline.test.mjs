@@ -16,6 +16,7 @@ const { computeRow } = await import('../research/scan-universe.js');
 
 const J = (o) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => o });
 const calls = {};
+let flowCreatedAt = () => new Date().toISOString();
 const exp = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10).replace(/-/g, '').slice(2);
 const sym = (cp, k) => `AAPL${exp}${cp}${String(k * 1000).padStart(8, '0')}`;
 function route(s) {
@@ -27,7 +28,7 @@ function route(s) {
     { option_symbol: sym('C', 210), volume: 80000, open_interest: 3000, implied_volatility: 0.44, delta: 0.5, gamma: 0.05, nbbo_bid: 3, nbbo_ask: 3.2 },
     { option_symbol: sym('P', 190), volume: 900, open_interest: 3000, implied_volatility: 0.46, delta: -0.3, gamma: 0.03, nbbo_bid: 1, nbbo_ask: 1.2 },
   ] });
-  if (s.includes('/flow-alerts')) return J({ data: [{ type: 'call', total_premium: '400000', total_ask_side_prem: '380000', total_bid_side_prem: '20000', total_size: 50, expiry: '2099-01-01', option_chain: sym('C', 210), created_at: new Date().toISOString() }] });
+  if (s.includes('/flow-alerts')) return J({ data: [{ type: 'call', total_premium: '400000', total_ask_side_prem: '380000', total_bid_side_prem: '20000', total_size: 50, expiry: '2099-01-01', option_chain: sym('C', 210), created_at: flowCreatedAt() }] });
   if (s.includes('/oi-change')) return J({ data: [{ option_symbol: sym('C', 200), curr_oi: 6000, prev_oi: 4000 }, { option_symbol: sym('P', 200), curr_oi: 4100, prev_oi: 4000 }] });
   if (s.includes('/greek-exposure/strike')) return J({ data: [{ strike: '200', call_gex: '5e8', put_gex: '-2e8', date: '2026-08-24' }, { strike: '210', call_gex: '1e8', put_gex: '-6e8', date: '2026-08-24' }] });
   if (s.includes('/greek-exposure')) return J({ data: [{ call_gamma: '3e8', put_gamma: '-1e8', date: '2026-08-24' }] });
@@ -107,6 +108,17 @@ test('concurrent identical builds coalesce into one run; read-only joins a side-
   const [a, b, c] = await Promise.all([computeTickerSignal(P(), 'AAPL', ctx, {}), computeTickerSignal(P(), 'AAPL', ctx, {}), computeTickerSignal(P(), 'AAPL', ctx, { sideEffects: false })]);
   assert.equal(a, b); assert.equal(a, c);
   assert.equal(calls['/api/stock/AAPL/option-contracts'], 1);
+});
+
+test('v2 flow input is the CURRENT ET session only: yesterday\'s alerts do not count', async () => {
+  flowCreatedAt = () => new Date(Date.now() - 2 * 86400000).toISOString();
+  try {
+    const r = await computeTickerSignal(P(), 'AAPL', mkCtx('old'), { sideEffects: false });
+    assert.equal(r.ok, true);
+    assert.ok(r.v2 && r.v2.available === false);              // no same-session flow => no primary flow evidence
+  } finally { flowCreatedAt = () => new Date().toISOString(); }
+  const fresh = await computeTickerSignal(P(), 'AAPL', mkCtx('new'), { sideEffects: false });
+  assert.equal(fresh.v2.available, true);
 });
 
 test.after(() => { globalThis.fetch = real; });

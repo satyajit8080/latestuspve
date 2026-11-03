@@ -150,7 +150,10 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   // ---------------- v2 SHADOW (never affects the production score) ----------------
   let v2 = null, v2state = null; const readiness = { rvol: null, ivSkew: null, sector: null, at: nowIso };
   try {
-    const trades = chain.flow && Array.isArray(chain.flow.largeTrades) ? chain.flow.largeTrades : [];
+    // v2 flow input = alerts from the CURRENT ET session up to now. "The last N alerts" mixes days and is not stationary;
+    // an alert without a timestamp cannot be placed in a session and is excluded.
+    const today = etDate(now.getTime());
+    const trades = (chain.flow && Array.isArray(chain.flow.largeTrades) ? chain.flow.largeTrades : []).filter((t) => isNum(t.ts) && t.ts <= now.getTime() + 60000 && etDate(t.ts) === today);
     const rawFlow = trades.length ? signedFlow(trades, { spot }) : null;
     let normalized = {};
     if (rawFlow && rawFlow.available) {
@@ -191,7 +194,7 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
       v2state = stateStep(prevState, { score: v2.score, dir: v2.dir, at: nowIso });
       v2state.gammaRegime = v2.gamma && v2.gamma.available ? v2.gamma.regime : null;
       if (sideEffects) ctx.v2State.set(ticker, v2state);
-      sig.v2 = { version: V2_VERSION, score: v2.score, dir: v2.dir, state: v2state.state, smoothedScore: v2state.smoothedScore, actionable: isActionable(v2state.state),
+      sig.v2 = { version: V2_VERSION, score: v2.score, dir: v2.dir, state: v2state.state, smoothedScore: v2state.smoothedScore, actionable: isActionable(v2state.state), stateReset: v2state.reset ? v2state.resetReason : null,
         coverage: v2.coverage, components: v2.components, multipliers: v2.multipliers, reasons: v2.reasons, quality: v2.quality, gated: v2.gated,
         note: 'shadow only — production score is unchanged' };
     }
