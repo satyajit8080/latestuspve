@@ -17,6 +17,7 @@ const { computeRow } = await import('../research/scan-universe.js');
 const J = (o) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => o });
 const calls = {};
 let flowCreatedAt = () => new Date().toISOString();
+let flowSymbol = () => sym('C', 210);
 let infoData = () => ({ next_earnings_date: '2099-01-01', sector: 'Technology' });
 const exp = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10).replace(/-/g, '').slice(2);
 const sym = (cp, k) => `AAPL${exp}${cp}${String(k * 1000).padStart(8, '0')}`;
@@ -29,7 +30,7 @@ function route(s) {
     { option_symbol: sym('C', 210), volume: 80000, open_interest: 3000, implied_volatility: 0.44, delta: 0.5, gamma: 0.05, nbbo_bid: 3, nbbo_ask: 3.2 },
     { option_symbol: sym('P', 190), volume: 900, open_interest: 3000, implied_volatility: 0.46, delta: -0.3, gamma: 0.03, nbbo_bid: 1, nbbo_ask: 1.2 },
   ] });
-  if (s.includes('/flow-alerts')) return J({ data: [{ type: 'call', total_premium: '400000', total_ask_side_prem: '380000', total_bid_side_prem: '20000', total_size: 50, expiry: '2099-01-01', option_chain: sym('C', 210), created_at: flowCreatedAt() }] });
+  if (s.includes('/flow-alerts')) return J({ data: [{ type: 'call', total_premium: '400000', total_ask_side_prem: '380000', total_bid_side_prem: '20000', total_size: 50, expiry: '2099-01-01', option_chain: flowSymbol(), created_at: flowCreatedAt() }] });
   if (s.includes('/oi-change')) return J({ data: [{ option_symbol: sym('C', 200), curr_oi: 6000, prev_oi: 4000 }, { option_symbol: sym('P', 200), curr_oi: 4100, prev_oi: 4000 }] });
   if (s.includes('/greek-exposure/strike')) return J({ data: [{ strike: '200', call_gex: '5e8', put_gex: '-2e8', date: '2026-08-24' }, { strike: '210', call_gex: '1e8', put_gex: '-6e8', date: '2026-08-24' }] });
   if (s.includes('/greek-exposure')) return J({ data: [{ call_gamma: '3e8', put_gamma: '-1e8', date: '2026-08-24' }] });
@@ -174,6 +175,28 @@ test('read-only builds never write baselines even when computing z-scores', asyn
   const before = ctx.baselines.stats().observations;
   await computeTickerSignal(P(), 'AAPL', ctx, { sideEffects: false });
   assert.equal(ctx.baselines.stats().observations, before);
+});
+
+test('v2 delta comes from the matching chain contract; an unmatched alert is excluded, never imputed', async () => {
+  const ok = await computeTickerSignal(P(), 'AAPL', mkCtx('dm1'), { sideEffects: false });
+  assert.equal(ok.v2.available, true);
+  assert.equal(ok.v2.flow.deltaMissing, 0);
+  assert.equal(typeof ok.v2.flow.deltaWeightedSignedFlow, 'number');
+  flowSymbol = () => 'ZZZZ260918C00123000';                              // not in the chain
+  try {
+    const miss = await computeTickerSignal(P(), 'AAPL', mkCtx('dm2'), { sideEffects: false });
+    assert.equal(miss.v2.flow.deltaMissing, 1);
+    assert.equal(miss.v2.flow.deltaWeightedSignedFlow, null);
+    assert.ok(miss.v2.quality.flags.includes('delta_unmatched_1'));
+  } finally { flowSymbol = () => sym('C', 210); }
+});
+
+test('v2 intraday inputs are computed from sessionBars (not null constants)', async () => {
+  const r = await computeTickerSignal(P(), 'AAPL', mkCtx('im'), { sideEffects: false });
+  assert.equal(r.v2.available, true);
+  assert.equal(r.signal.v2.version, 'v2-0.2.0');
+  assert.equal(typeof r.v2.price.momentum, 'number');           // ret5m/15m/30m now flow in from the session bars
+  assert.equal(typeof r.v2.price.first30mReturn, 'number');
 });
 
 test.after(() => { globalThis.fetch = real; });

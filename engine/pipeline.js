@@ -10,7 +10,7 @@ import path from 'node:path';
 import { buildOptionsSignal, computeMaxPain, signedPremiumFromTrades, DEFAULT_OPTIONS_CFG } from './options-engine.js';
 import { buildOptionsSignal as buildLegacySignal } from '../legacy/options-engine-1.1.1.js';
 import { scoreV2, V2_VERSION } from './v2.js';
-import { signedFlow } from './features.js';
+import { signedFlow, intradayMetrics } from './features.js';
 import { step as stateStep, isActionable } from './state.js';
 import { computeRvol, MarketContext, IvSkewTracker, EarningsCalendar, eventFlags } from './context.js';
 import { BaselineStore } from '../store/normalize.js';
@@ -188,7 +188,11 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   let rvolVal = null, mktRegime = null;                                   // context recorded in the journal row
   let v2 = null, v2state = null; const readiness = { rvol: null, ivSkew: null, sector: null, at: nowIso };
   try {
-    const trades = sessionTrades;   // same current-session alerts the production engine used
+    // |delta| comes from the chain contract matching the alert's OCC symbol; unmatched alerts get null (excluded from
+    // delta weighting by signedFlow, never imputed).
+    const deltaBySymbol = new Map((chain.contracts || []).filter((x) => x.symbol && isNum(x.delta)).map((x) => [x.symbol, Math.abs(x.delta)]));
+    const trades = sessionTrades.map((t) => ({ ...t, delta: t.option_symbol && deltaBySymbol.has(t.option_symbol) ? deltaBySymbol.get(t.option_symbol) : null }));
+    const im = intradayMetrics(intraday && intraday.sessionBars);
     const rawFlow = trades.length ? signedFlow(trades, { spot }) : null;
     let normalized = {};
     if (rawFlow && rawFlow.available) {
@@ -221,16 +225,16 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
       market: { spyTrend: mkt.spyTrend, qqqTrend: mkt.qqqTrend, sectorTrend: sector.sectorTrend || null, relativeStrength: sector.sectorRelativeStrength ?? null },
       ivChanges: ivc.available ? ivc : {},
       events: { timeBucket: flags.timeBucket, isOpex: flags.isOpex, earningsDaysAway: earn },
-      vwapSlope: null, ret5m: null, ret15m: null, ret30m: null,
+      vwapSlope: im.vwapSlope, ret5m: im.ret5m, ret15m: im.ret15m, ret30m: im.ret30m, first30mReturn: im.first30mReturn,
     });
-    if (sideEffects && rawFlow && rawFlow.available) ctx.v2PrevFlow.set(ticker, rawFlow.deltaWeightedSignedFlow);
+    if (sideEffects && rawFlow && rawFlow.available && isNum(rawFlow.deltaWeightedSignedFlow)) ctx.v2PrevFlow.set(ticker, rawFlow.deltaWeightedSignedFlow);
     if (v2 && v2.available) {
       const prevState = ctx.v2State.get(ticker) || null;
       // read-only calls still show what the state WOULD be, but never store it
       v2state = stateStep(prevState, { score: v2.score, dir: v2.dir, at: nowIso });
       v2state.gammaRegime = v2.gamma && v2.gamma.available ? v2.gamma.regime : null;
       if (sideEffects) ctx.v2State.set(ticker, v2state);
-      sig.v2 = { version: V2_VERSION, score: v2.score, dir: v2.dir, state: v2state.state, smoothedScore: v2state.smoothedScore, actionable: isActionable(v2state.state), stateReset: v2state.reset ? v2state.resetReason : null,
+      sig.v2 = { version: V2_VERSION, score: v2.score, dir: v2.dir, state: v2state.state, smoothedScore: v2state.smoothedScore, actionable: isActionable(v2state.state) && !!v2.actionable, stateReset: v2state.reset ? v2state.resetReason : null,
         coverage: v2.coverage, components: v2.components, multipliers: v2.multipliers, reasons: v2.reasons, quality: v2.quality, gated: v2.gated,
         note: 'shadow only — production score is unchanged' };
     }

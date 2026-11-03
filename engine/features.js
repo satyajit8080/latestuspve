@@ -16,7 +16,7 @@ export function signedFlow(trades, { spot = null } = {}) {
 
   let callAsk = 0, callBid = 0, putAsk = 0, putBid = 0;
   let deltaFlow = 0, openingDeltaFlow = 0, openingSigned = 0;
-  let counted = 0, sideUnknown = 0, deltaMissing = 0, openingKnown = 0;
+  let counted = 0, sideUnknown = 0, deltaMissing = 0, deltaCounted = 0, openingKnown = 0;
 
   for (const t of rows) {
     const prem = isNum(t.premium) ? t.premium : null;
@@ -39,19 +39,17 @@ export function signedFlow(trades, { spot = null } = {}) {
     if (right === 'call') { callAsk += askPrem; callBid += bidPrem; } else { putAsk += askPrem; putBid += bidPrem; }
 
     // delta-weighting: converts premium into share-equivalent directional pressure (DEX).
-    // Far-OTM lottery tickets have small |delta| so they cannot dominate (spec §5).
+    // Far-OTM lottery tickets have small |delta| so they cannot dominate. |delta| comes from the matching chain
+    // contract (pipeline annotates t.delta). When it cannot be matched the trade is EXCLUDED from delta weighting
+    // and flagged: an imputed 0.5 would invent a delta.
     const d = isNum(t.delta) ? Math.abs(t.delta) : null;
-    if (d == null) deltaMissing++;
-    const w = d == null ? 0.5 : d;                                   // neutral weight when delta unknown
     const dirSign = right === 'call' ? 1 : -1;
     const aggressorSign = (askShare - 0.5) * 2;                      // +1 all ask, -1 all bid
-    const contribution = prem * w * dirSign * aggressorSign;
-    deltaFlow += contribution;
-    if (t.isOpening === true || t.is_opening === true || t.all_opening_trades === true) {
-      openingDeltaFlow += contribution;
-      openingSigned += (askPrem - bidPrem) * dirSign;
-      openingKnown++;
-    }
+    let contribution = null;
+    if (d == null) deltaMissing++;
+    else { contribution = prem * d * dirSign * aggressorSign; deltaFlow += contribution; deltaCounted++; }
+    const opening = t.isOpening === true || t.is_opening === true || t.all_opening_trades === true;
+    if (opening) { openingKnown++; openingSigned += (askPrem - bidPrem) * dirSign; if (contribution != null) openingDeltaFlow += contribution; }
     counted++;
   }
 
@@ -61,18 +59,19 @@ export function signedFlow(trades, { spot = null } = {}) {
   const signedPremium = (callAsk - callBid) - (putAsk - putBid);
   const gross = callAsk + callBid + putAsk + putBid;
   const quality = sideUnknown > counted ? 'degraded' : (deltaMissing > counted / 2 ? 'partial_delta' : 'ok');
+  const hasDelta = deltaCounted > 0;                                  // no matched delta at all => the delta-weighted figures are null, never 0
 
   return {
     available: true, quality,
     callAskPremium: r2(callAsk), callBidPremium: r2(callBid), putAskPremium: r2(putAsk), putBidPremium: r2(putBid),
     totalAskPremium: r2(totalAsk), totalBidPremium: r2(totalBid),
     signedPremium: r2(signedPremium),
-    deltaWeightedSignedFlow: r2(deltaFlow),
-    openingSignedPremium: r2(openingSigned), openingDeltaFlow: r2(openingDeltaFlow),
+    deltaWeightedSignedFlow: hasDelta ? r2(deltaFlow) : null,
+    openingSignedPremium: r2(openingSigned), openingDeltaFlow: hasDelta ? r2(openingDeltaFlow) : null,
     flowIntensity: r2(gross),
     // normalized -1..1 imbalance, robust to size
     imbalance: gross > 0 ? r4(signedPremium / gross) : null,
-    trades: counted, sideUnknown, deltaMissing, openingTrades: openingKnown,
+    trades: counted, sideUnknown, deltaMissing, deltaExcluded: deltaMissing, openingTrades: openingKnown,
     aggressorNote: 'aggressor side inferred from trade-vs-quote; an estimate, not ground truth',
   };
 }
@@ -104,12 +103,13 @@ export function gammaRegime({ gex = null, spot = null, gammaFlip = null, atr = n
 
   if (!regime) return { available: false, reason: 'no_gamma_data', regime: null };
 
-  // Regime does NOT set direction — it selects how flow should be interpreted.
+  // Regime does NOT set direction — it only scales how much a price-CONFIRMED flow signal is trusted.
+  // Never > 1.15, and nothing rewards flow that conflicts with price (the old reversion multiplier of 1.15 did).
   const interpretation = regime === 'positive'
-    ? { mode: 'mean_reversion', momentumMultiplier: 0.8, reversionMultiplier: 1.15, note: 'Dealers long gamma: hedging dampens moves; fade extensions toward walls.' }
+    ? { mode: 'mean_reversion', momentumMultiplier: 0.85, note: 'Dealers long gamma: hedging dampens moves, so flow-driven momentum is attenuated.' }
     : regime === 'negative'
-      ? { mode: 'trend_following', momentumMultiplier: 1.2, reversionMultiplier: 0.85, note: 'Dealers short gamma: hedging amplifies moves; breaks can accelerate.' }
-      : { mode: 'neutral', momentumMultiplier: 1.0, reversionMultiplier: 1.0, note: 'Price sits inside the gamma-flip dead-band; regime is unreliable here.' };
+      ? { mode: 'trend_following', momentumMultiplier: 1.15, note: 'Dealers short gamma: hedging amplifies moves; a price-confirmed break can accelerate (boost capped at 1.15).' }
+      : { mode: 'neutral', momentumMultiplier: 1.0, note: 'Price sits inside the gamma-flip dead-band; regime is unreliable here (multiplier 1.0).' };
 
   const nearWall = (w) => (isNum(w) && isNum(spot) && isNum(atr) && atr > 0 ? r2((spot - w) / atr) : null);
   return {
@@ -191,4 +191,23 @@ export function eventGates({ earningsDaysAway = null, isOpex = false, isFomc = f
   if (timeBucket === '09:30-09:45') { gates.push('OPENING_VOLATILITY'); multiplier *= 0.95; }
   if (timeBucket === 'premarket' || timeBucket === 'afterhours') { gates.push('OUTSIDE_RTH'); blocked = true; }
   return { gates, blocked, multiplier: r4(multiplier), reason: blocked ? gates.find((g) => g === 'EARNINGS_RISK' || g === 'OUTSIDE_RTH') : null };
+}
+
+// ---------------------------------------------------------------------------
+// INTRADAY INPUTS computed from the latest session's RTH 5-minute bars (null when there are not enough bars).
+// Returns are in PERCENT. vwapSlope = change in the running session VWAP over the last 3 bars (price units).
+// ---------------------------------------------------------------------------
+export function intradayMetrics(sessionBars) {
+  const b = Array.isArray(sessionBars) ? sessionBars.filter((x) => isNum(x.close) || isNum(x.price)) : [];
+  const px = (x) => (isNum(x.close) ? x.close : x.price);
+  const out = { ret5m: null, ret15m: null, ret30m: null, vwapSlope: null, first30mReturn: null, bars: b.length };
+  if (b.length < 2) return out;
+  const last = px(b[b.length - 1]);
+  const ret = (n) => (b.length > n && isNum(px(b[b.length - 1 - n])) && px(b[b.length - 1 - n]) > 0 ? r2(((last - px(b[b.length - 1 - n])) / px(b[b.length - 1 - n])) * 100) : null);
+  out.ret5m = ret(1); out.ret15m = ret(3); out.ret30m = ret(6);
+  const runVwap = (n) => { let pv = 0, vol = 0; for (let i = 0; i < n; i++) { const x = b[i]; if (!isNum(x.high) || !isNum(x.low) || !isNum(x.volume)) continue; pv += ((x.high + x.low + px(x)) / 3) * x.volume; vol += x.volume; } return vol > 0 ? pv / vol : null; };
+  const vNow = runVwap(b.length), vThen = b.length > 3 ? runVwap(b.length - 3) : null;
+  out.vwapSlope = isNum(vNow) && isNum(vThen) ? r4(vNow - vThen) : null;
+  if (b.length >= 6 && isNum(b[0].open ?? px(b[0])) && (b[0].open ?? px(b[0])) > 0) { const o = b[0].open ?? px(b[0]); out.first30mReturn = r2(((px(b[5]) - o) / o) * 100); }
+  return out;
 }

@@ -6,7 +6,7 @@
 
 import { signedFlow, flowAcceleration, gammaRegime, priceConfirmation, rvolMultiplier, marketRegime, ivSkewChange, eventGates } from './features.js';
 
-export const V2_VERSION = 'v2-0.1.0';
+export const V2_VERSION = 'v2-0.2.0';
 
 export const WEIGHTS = { flow: 0.45, price: 0.20, gamma: 0.15, market: 0.10, context: 0.10 };
 
@@ -35,6 +35,7 @@ export function scoreV2({
   let flowScore = null, dir = null;
   if (flow.available) {
     if (flow.quality !== 'ok') { quality.flags.push(`flow_${flow.quality}`); quality.degraded = true; }
+    if (flow.deltaMissing) quality.flags.push(`delta_unmatched_${flow.deltaMissing}`);   // excluded from delta weighting, never imputed
     // prefer the per-ticker normalized z-score; fall back to the raw imbalance
     const zDelta = normalized.deltaWeightedSignedFlow && normalized.deltaWeightedSignedFlow.available ? normalized.deltaWeightedSignedFlow.z : null;
     const zOpening = normalized.openingDeltaFlow && normalized.openingDeltaFlow.available ? normalized.openingDeltaFlow.z : null;
@@ -77,7 +78,9 @@ export function scoreV2({
     // Does the setup match what this regime supports? Momentum-aligned flow in negative
     // gamma is favoured; in positive gamma it is attenuated and fades are favoured.
     const momentumAligned = price.available && dir ? (dir === 'bull' ? price.bullConfirmed : price.bearConfirmed) === true : null;
-    regimeMultiplier = momentumAligned === true ? gamma.momentumMultiplier : momentumAligned === false ? gamma.reversionMultiplier : 1.0;
+    // Boost only for PRICE-CONFIRMED flow in negative gamma (<= 1.15); attenuate in positive gamma (0.85); 1.0 in the dead-band
+    // or when price is unavailable/conflicting. Nothing rewards flow that conflicts with price.
+    regimeMultiplier = momentumAligned === true ? gamma.momentumMultiplier : (gamma.regime === 'positive' ? gamma.momentumMultiplier : 1.0);
     gammaScore = gamma.inDeadband ? 40 : (gamma.regime === 'negative' && momentumAligned === true ? 90 : gamma.regime === 'positive' && momentumAligned === true ? 55 : 60);
     push(gamma.regime === 'negative' ? 'NEGATIVE_GAMMA_TREND_REGIME' : gamma.regime === 'positive' ? 'POSITIVE_GAMMA_MEAN_REVERSION' : 'GAMMA_DEADBAND', null, gamma.note);
     if (isNum(gamma.callWallDistanceAtr) && Math.abs(gamma.callWallDistanceAtr) < 0.3) push('AT_CALL_WALL', null, 'Price is at the call wall — resistance in positive gamma, acceleration risk in negative.');
@@ -139,6 +142,8 @@ export function scoreV2({
     components: Object.fromEntries(parts.map((p) => [p.k, r2(p.v)])),
     multipliers: { regime: regimeMultiplier, rvol: rv.multiplier, market: marketMultiplier, events: ev.multiplier, combined: r2(totalMultiplier), rawCombined: r2(rawMultiplier), capped: rawMultiplier !== totalMultiplier },
     coverage: r2(coverage * 100),
+    // not actionable unless BOTH flow and price evidence exist
+    actionable: isNum(flowScore) && isNum(priceScore) && !gated,
     flow, gamma, price, rvol: rv, ivSkew: iv, market: mkt.available ? { regime: mkt.regime, relativeStrength: mkt.relativeStrength } : null,
     acceleration: accel, reasons, quality,
     weights: WEIGHTS,

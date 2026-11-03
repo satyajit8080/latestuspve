@@ -100,6 +100,7 @@ export class UnusualWhalesOptionsProvider {
         const bid = pick(o, 'bid', 'nbbo_bid', 'bid_price'), ask = pick(o, 'ask', 'nbbo_ask', 'ask_price');
         const type = (str(o, 'type', 'option_type', 'right') || '').toLowerCase();
         return {
+          symbol: typeof sym === 'string' ? sym : null,
           type: occ ? occ.type : (type.startsWith('c') ? 'call' : type.startsWith('p') ? 'put' : type),
           strike: occ ? occ.strike : pick(o, 'strike', 'strike_price'),
           expiration: occ ? occ.expiration : str(o, 'expiry', 'expiration', 'expiration_date'),
