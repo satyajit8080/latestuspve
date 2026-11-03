@@ -28,41 +28,47 @@ export class UnusualWhalesOptionsProvider {
   constructor({ apiKey, baseUrl = 'https://api.unusualwhales.com', limiter = null } = {}) { this.name = 'uw'; this.apiKey = apiKey; this.limiter = limiter; this.baseUrl = String(baseUrl).replace(/\/$/, ''); }
   // §7 rate-limit aware fetch: dedupe identical in-flight calls, honour UW headers,
   // exponential backoff on 429/5xx, and NEVER leak the token in an error message.
-  async _get(pathq, { attempt = 0, maxAttempts = 3 } = {}) {
+  // The retry loop lives INSIDE the deduped function. Re-entering _get() from inside
+  // limiter.dedupe() would find its own key in flight and wait on itself forever.
+  async _get(pathq, { maxAttempts = 3 } = {}) {
     const limiter = this.limiter;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const run = async () => {
-      if (limiter) {
-        const gate = limiter.canRequest();
-        if (!gate.ok) {
-          if (gate.reason === 'RATE_WINDOW_FULL' && attempt < maxAttempts) {
-            await new Promise((r) => setTimeout(r, Math.min(gate.retryAfterMs || 1000, 5000)));
-            return this._get(pathq, { attempt: attempt + 1, maxAttempts });
+      for (let attempt = 0; ; attempt++) {
+        if (limiter) {
+          const gate = limiter.canRequest();
+          if (!gate.ok) {
+            if (gate.reason === 'RATE_WINDOW_FULL' && attempt < maxAttempts) { await sleep(Math.min(gate.retryAfterMs || 1000, 5000)); continue; }
+            const err = new Error(`UW request refused: ${gate.reason}`); err.rateLimited = true; throw err;
           }
-          const err = new Error(`UW request refused: ${gate.reason}`); err.rateLimited = true; throw err;
+          limiter.record();
         }
-        limiter.record();
+        let res;
+        try { res = await fetch(`${this.baseUrl}${pathq}`, { headers: { Authorization: `Bearer ${this.apiKey}`, Accept: 'application/json, text/plain' } }); }
+        catch (e) {
+          if (limiter) limiter.logFailure(pathq, e.message, attempt);
+          if (attempt < maxAttempts) { await sleep(limiter ? limiter.backoffMs(attempt) : 500 * 2 ** attempt); continue; }
+          throw new Error(`UW network error on ${pathq}`);
+        }
+        if (limiter) limiter.readHeaders(res.headers);
+        if (res.status === 429) {
+          // A 429 is a PER-MINUTE throttle, not proof the daily quota is gone. Back off and retry;
+          // only a sustained run of 429s (tracked in the limiter) escalates to a hard stop.
+          const explicitZero = limiter && isNum(limiter.minuteRemaining) && limiter.minuteRemaining <= 0;
+          if (limiter) { limiter.on429(explicitZero); limiter.logFailure(pathq, `429${explicitZero ? ' (minute window empty)' : ''}`, attempt); }
+          if (limiter && limiter.hardQuotaGone) { const err = new Error('UW quota exhausted (sustained 429s)'); err.rateLimited = true; throw err; }
+          if (attempt < maxAttempts) { await sleep(limiter ? limiter.backoffMs(attempt) : 500 * 2 ** attempt); continue; }
+          const err = new Error(`UW 429 on ${pathq}`); err.rateLimited = true; throw err;
+        }
+        if (res.status >= 500 && attempt < maxAttempts) {
+          if (limiter) limiter.logFailure(pathq, `status ${res.status}`, attempt);
+          await sleep(limiter ? limiter.backoffMs(attempt) : 500 * 2 ** attempt);
+          continue;
+        }
+        if (!res.ok) { if (limiter) limiter.logFailure(pathq, `status ${res.status}`, attempt); throw new Error(`UW ${res.status} on ${pathq}`); }
+        if (limiter) limiter.onSuccess();   // clear any 429 streak on a good response (self-heal)
+        return res.json();
       }
-      let res;
-      try { res = await fetch(`${this.baseUrl}${pathq}`, { headers: { Authorization: `Bearer ${this.apiKey}`, Accept: 'application/json, text/plain' } }); }
-      catch (e) { if (limiter) limiter.logFailure(pathq, e.message, attempt); throw new Error(`UW network error on ${pathq}`); }
-      if (limiter) limiter.readHeaders(res.headers);
-      if (res.status === 429) {
-        // A 429 is a PER-MINUTE throttle, not proof the daily quota is gone. Back off and retry;
-        // only a sustained run of 429s (tracked in the limiter) escalates to a hard stop.
-        const explicitZero = limiter && isNum(limiter.minuteRemaining) && limiter.minuteRemaining <= 0;
-        if (limiter) { limiter.on429(explicitZero); limiter.logFailure(pathq, `429${explicitZero ? ' (minute window empty)' : ''}`, attempt); }
-        if (limiter && limiter.hardQuotaGone) { const err = new Error('UW quota exhausted (sustained 429s)'); err.rateLimited = true; throw err; }
-        if (attempt < maxAttempts) { await new Promise((r) => setTimeout(r, limiter ? limiter.backoffMs(attempt) : 500 * 2 ** attempt)); return this._get(pathq, { attempt: attempt + 1, maxAttempts }); }
-        const err = new Error(`UW 429 on ${pathq}`); err.rateLimited = true; throw err;
-      }
-      if (res.status >= 500 && attempt < maxAttempts) {
-        if (limiter) limiter.logFailure(pathq, `status ${res.status}`, attempt);
-        await new Promise((r) => setTimeout(r, limiter ? limiter.backoffMs(attempt) : 500 * 2 ** attempt));
-        return this._get(pathq, { attempt: attempt + 1, maxAttempts });
-      }
-      if (!res.ok) { if (limiter) limiter.logFailure(pathq, `status ${res.status}`, attempt); throw new Error(`UW ${res.status} on ${pathq}`); }
-      if (limiter) limiter.onSuccess();   // clear any 429 streak on a good response (self-heal)
-      return res.json();
     };
     return limiter ? limiter.dedupe(`${pathq}`, run) : run();
   }
