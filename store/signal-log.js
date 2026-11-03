@@ -95,6 +95,7 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
         actionable: sig.actionable ?? null, tradeable: sig.tradeable ?? null, coverage: isNum(sig.coverage) ? sig.coverage : null, availableDirectional: sig.availableDirectional ?? null,
         dataQuality: sig.dataQuality, optionsEngineVersion: sig.optionsEngineVersion || null,
       },
+      legacyScore: legacy && Number.isFinite(legacy.finalScore) ? legacy.finalScore : null,
       legacy: legacy || null,   // frozen opt-1.1.1 result on the same inputs (transition comparison; see legacy/README.md)
       scored: {                                                 // (A) used in production scoring
         gexChainComputed: isNum(scoredAgg.gex) ? scoredAgg.gex : null,

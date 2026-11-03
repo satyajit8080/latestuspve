@@ -103,3 +103,21 @@ test('screener: net premium is null unless BOTH sides are present', async () => 
     assert.equal(by.B.netPremium, 70);
   });
 });
+
+test('every normaliser returns null (never 0) for missing or empty-string fields', async () => {
+  await withUW({
+    '/stock-state': { data: { close: '', prev_close: '  ', volume: null } },
+    '/greek-exposure/strike': { data: [{ strike: '', call_gex: '', put_gex: null }] },
+    '/greek-exposure': { data: [{ call_gamma: '', put_gamma: null }] },
+    '/iv-rank': { data: [{ iv_rank_1y: '', volatility: null }] },
+    '/oi-change': { data: [{ option_symbol: 'AAPL260918C00200000', curr_oi: '', prev_oi: '' }] },
+    '/net-prem-ticks': { data: [{ net_call_premium: '', net_put_premium: null }] },
+  }, async (p) => {
+    const u = await p.getUnderlying('X');
+    assert.equal(u.available, false); assert.equal(u.underlying.price, null); assert.equal(u.underlying.prevClose, null); assert.equal(u.underlying.volume, null);
+    const g = await p.getGex('X'); assert.equal(g.available, false); assert.equal(g.net_gex, null);
+    const iv = await p.getIvRank('X'); assert.equal(iv.available === true ? iv.iv_rank : null, null);
+    const oc = await p.getOiChange('X'); assert.equal(oc.available, false);
+    const np = await p.getNetPremium('X'); assert.equal(np.available, false); assert.equal(np.total_net_premium, null);
+  });
+});
