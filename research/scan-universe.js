@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { crossSectionalRank } from '../engine/context.js';
+import { safeTicker } from '../ticker.js';
 import { createPipelineContext, computeTickerSignal } from '../engine/pipeline.js';
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const g = (o, ...ks) => { let v = o; for (const k of ks) { if (v == null) return null; v = v[k]; } return v == null ? null : v; };
@@ -66,7 +67,7 @@ export async function computeRow(P, ticker, opt) {
 export async function main() {
   const key = process.env.UNUSUAL_WHALES_API_TOKEN;
   const dir = process.env.SCAN_DIR || path.join(ROOT, 'research-data', 'scan');
-  const limit = Math.max(1, Math.min(1000, Number(process.env.SCAN_LIMIT || 600)));   // universe size per run: top 600 by the UW screener
+  const limit = Math.max(1, Number(process.env.SCAN_LIMIT || 1000));   // max tickers taken from the UW screener (no hard cap here)
   const gap = Number(process.env.SCAN_GAP_MS || 100);
   if (!key) { console.error('UNUSUAL_WHALES_API_TOKEN required.'); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
@@ -84,8 +85,16 @@ export async function main() {
   if (P.name === 'null') { console.error(P.reason || 'No options provider configured'); process.exit(1); }
   const ctx = createPipelineContext(P, { dailyDir: dir });   // daily-static data shared via files under SCAN_DIR
 
-  let screener = { rows: [] }; try { screener = await P.getScreener({ range: '1d', limit }); } catch (e) { console.error('screener failed:', e.message); }
-  const tickers = (screener.rows || []).map((r) => r.ticker).filter(Boolean).slice(0, limit);
+  let screener = { rows: [] }; try { if (process.env.SCAN_ONLY_LIST !== 'true') screener = await P.getScreener({ range: '1d', limit }); } catch (e) { console.error('screener failed:', e.message); }
+  // Universe = the UW screener (up to SCAN_LIMIT; UW itself returns at most what its endpoint allows) PLUS any extra tickers you list
+  // in research-data/tickers.txt (one per line or comma-separated) or SCAN_TICKERS. SCAN_ONLY_LIST=true scans just your list.
+  const extra = [];
+  try { const f = process.env.SCAN_TICKERS_FILE || path.join(ROOT, 'research-data', 'tickers.txt'); if (fs.existsSync(f)) extra.push(...fs.readFileSync(f, 'utf8').split(/[\s,;]+/)); } catch { /* optional */ }
+  if (process.env.SCAN_TICKERS) extra.push(...process.env.SCAN_TICKERS.split(/[\s,;]+/));
+  const listed = [...new Set(extra.map((x) => safeTicker(x)).filter(Boolean))];
+  const fromScreener = process.env.SCAN_ONLY_LIST === 'true' ? [] : (screener.rows || []).map((r) => r.ticker).filter(Boolean).slice(0, limit);
+  const tickers = [...new Set([...listed, ...fromScreener])];
+  console.log(`  universe: ${fromScreener.length} from screener + ${listed.length} listed = ${tickers.length}`);
   if (!tickers.length) { console.error('empty universe from /screener (warming or off-hours) — wrote nothing.'); process.exit(0); }
   let sectorMap = {}; try { sectorMap = await P.getCompanies(tickers); sectorMap = Object.fromEntries(Object.entries(sectorMap).map(([k, v]) => [k, v && v.sector])); } catch {}
 
