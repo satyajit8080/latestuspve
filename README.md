@@ -9,7 +9,7 @@ cp .env.example .env      # add your PVE_AGENT_KEY (optional — runs in DEMO mo
 npm install
 npm start                 # http://localhost:4000
 ```
-Password: `SatyajitDD7` (change `DASHBOARD_PASSWORD` in `.env`).
+Set `DASHBOARD_PASSWORD` (16+ characters) and `SESSION_SECRET` (32+ random characters) in `.env`; the server refuses to start without them.
 
 ## Notes
 - PVE.trade is a **prediction-markets** flow/intel API, not an equity option chain. Bullish = YES-side,

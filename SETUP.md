@@ -30,11 +30,7 @@ npm install               # installs express (one dependency)
 npm start                 # starts the server
 ```
 
-Then open **http://localhost:4000** and log in with the password:
-
-```
-SatyajitDD7
-```
+Then open **http://localhost:4000** and log in with the `DASHBOARD_PASSWORD` you set in `.env`.
 
 You'll see a "DEMO DATA" banner. The scanner drifts every scan; wait a few cycles and 70%+
 signals will appear in the Fast Signal Scanner.
@@ -70,7 +66,8 @@ Optional type-check (needs TypeScript's `tsc` installed globally): `npm run type
 |---|---|---|
 | `PVE_AGENT_KEY` | *(empty)* | Your `pve_agent_...` key. Empty ⇒ DEMO mode. |
 | `PVE_BASE_URL` | `https://api.pve.trade/api/agent` | PVE API base; change only if told to. |
-| `DASHBOARD_PASSWORD` | `SatyajitDD7` | Login password for the dashboard. |
+| `DASHBOARD_PASSWORD` | *(required, 16+ chars)* | Login password for the dashboard. |
+| `SESSION_SECRET` | *(required, 32+ chars)* | Signs session cookies. Rotate to log everyone out. |
 | `PORT` | `4000` | Port the server listens on. |
 | `CACHE_TTL_MS` | `4000` | How long upstream responses are cached. |
 | `MIN_UPSTREAM_INTERVAL_MS` | `1200` | Minimum gap between identical upstream calls (rate-limit guard). |
@@ -135,8 +132,8 @@ for what a score has actually meant historically on your data.
 
 - **`command not found: node`** → install Node.js (step 1).
 - **Port 4000 in use** → set `PORT=4001` in `.env` (or stop the other process) and restart.
-- **Login fails** → the password is `DASHBOARD_PASSWORD` in `.env` (default `SatyajitDD7`); it's
-  case-sensitive.
+- **Login fails** → the password is `DASHBOARD_PASSWORD` in `.env` ; it's
+  case-sensitive. Repeated failures lock the IP out for a while.
 - **LIVE shows errors / empty** → confirm `PVE_AGENT_KEY` is set and valid; check **API / Data
   Monitor** for the exact status. Fields blank but calls succeed ⇒ see §7.
 - **Blank page / import error** → the app uses ES modules; serve it via `npm start` (opening

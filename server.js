@@ -18,6 +18,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadEnvFile } from './lib/env.js';
+import { resolveSecrets, LoginThrottle } from './lib/auth.js';
 import { filterMarkets, classifyMarket, configFromEnv, categorizeMarkets, ASSET_CATEGORIES, CLASSIFIER_VERSION } from './classify.js';
 import { ENGINE_VERSION } from './public/engine.js';
 import { makeOptionsProvider, optionsProviderStatus } from './providers/options.js';
@@ -40,30 +42,17 @@ import { buildOptionsSignal, OPTIONS_ENGINE_VERSION } from './public/options-eng
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ---- tiny .env loader (no dependency) ----------------------------------------
-(function loadEnv() {
-  try {
-    const p = path.join(__dirname, '.env');
-    if (!fs.existsSync(p)) return;
-    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-      if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-    }
-  } catch { /* ignore */ }
-})();
+// ---- .env loader (inline comments stripped; see lib/env.js) -------------------
+loadEnvFile(path.join(__dirname, '.env'), process.env, fs);
+
+let SECRETS;
+try { SECRETS = resolveSecrets(process.env); } catch (e) { console.error('FATAL: ' + e.message); process.exit(1); }
 
 const CONFIG = {
   BASE_URL: null,                      // §18: PVE Trade API removed; UW only
   BASE_URL_REMOVED: 'PVE_TRADE_API_REMOVED',
   AGENT_KEY: '',                       // §18: no PVE agent credentials
-  PASSWORD: (() => {
-    const p = process.env.DASHBOARD_PASSWORD;
-    if (p) { if (p.length < 12) console.warn('WARNING: DASHBOARD_PASSWORD is short (<12 chars) — use a long random secret.'); return p; }
-    if (process.env.NODE_ENV === 'test') return 'test-only-password';   // tests import server.js without a real secret
-    if (process.env.ALLOW_DEFAULT_PASSWORD === 'true') { console.warn('WARNING: using built-in default password — set DASHBOARD_PASSWORD in .env'); return 'SatyajitDD7'; }
-    console.error('FATAL: DASHBOARD_PASSWORD is not set. Add it to .env and restart, or set ALLOW_DEFAULT_PASSWORD=true to keep the old default temporarily.');
-    process.exit(1);
-  })(),
+  PASSWORD: SECRETS.password,
   PORT: Number(process.env.PORT || 4000),
   CACHE_TTL_MS: Number(process.env.CACHE_TTL_MS || 8000),
   MIN_UPSTREAM_INTERVAL_MS: Number(process.env.MIN_UPSTREAM_INTERVAL_MS || 1200),
@@ -294,9 +283,9 @@ async function callPVE({ endpointKey, pathq, params, normalizer, mode }) {
 //  this is not hardened multi-user auth)
 // =============================================================================
 // Stateless auth: the cookie is an HMAC-signed expiry, so sessions survive server restarts/deploys
-// (previously an in-memory Map wiped every restart → refresh bounced to login). Secret derives from the
-// dashboard password, so it's stable across restarts and rotates automatically if the password changes.
-const SESSION_SECRET = crypto.createHash('sha256').update('pve-sess-v1|' + CONFIG.PASSWORD).digest();
+// (previously an in-memory Map wiped every restart → refresh bounced to login). The signing secret is
+// SESSION_SECRET (independent of the password); rotating it logs everyone out.
+const SESSION_SECRET = crypto.createHash('sha256').update('pve-sess-v2|' + SECRETS.sessionSecret).digest();
 function signSession(expMs) { return `${expMs}.${crypto.createHmac('sha256', SESSION_SECRET).update(String(expMs)).digest('hex')}`; }
 function verifySession(token) {
   if (!token || typeof token !== 'string') return false;
@@ -322,13 +311,20 @@ function resolveMode() { return 'live'; } // demo mode removed — always live
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
+const LOGIN_THROTTLE = new LoginThrottle();
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' ? '; Secure' : '';
+if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
 app.post('/auth/login', (req, res) => {
-  if (!safeEq(req.body?.password || '', CONFIG.PASSWORD)) return res.status(403).json({ error: 'wrong password' });
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+  const gate = LOGIN_THROTTLE.check(ip);
+  if (!gate.ok) { res.setHeader('Retry-After', String(Math.ceil(gate.retryAfterMs / 1000))); return res.status(429).json({ error: 'too many attempts', retryAfterSeconds: Math.ceil(gate.retryAfterMs / 1000) }); }
+  if (!safeEq(req.body?.password || '', CONFIG.PASSWORD)) { LOGIN_THROTTLE.fail(ip); return res.status(403).json({ error: 'wrong password' }); }
+  LOGIN_THROTTLE.success(ip);
   const token = signSession(Date.now() + CONFIG.SESSION_TTL_MS);
-  res.setHeader('Set-Cookie', `pve_sess=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(CONFIG.SESSION_TTL_MS / 1000)}`);
+  res.setHeader('Set-Cookie', `pve_sess=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(CONFIG.SESSION_TTL_MS / 1000)}${COOKIE_SECURE}`);
   res.json({ ok: true, live: !!CONFIG.AGENT_KEY });
 });
-app.post('/auth/logout', (req, res) => { res.setHeader('Set-Cookie', 'pve_sess=; HttpOnly; Path=/; Max-Age=0'); res.json({ ok: true }); });
+app.post('/auth/logout', (req, res) => { res.setHeader('Set-Cookie', 'pve_sess=; HttpOnly; Path=/; Max-Age=0' + COOKIE_SECURE); res.json({ ok: true }); });
 app.get('/auth/status', (req, res) => res.json({ authed: authed(req), live: !!CONFIG.AGENT_KEY, baseUrl: CONFIG.BASE_URL, options: optionsProviderStatus(process.env) }));
 
 // §18 — the PVE Trade agent API has been REMOVED. UW is the only external market-data source.
@@ -882,5 +878,5 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 export const httpServer = app.listen(CONFIG.PORT, () => {
   console.log(`\n  PVE Signal Engine → http://localhost:${CONFIG.PORT}`);
   console.log(`  Options data: Unusual Whales only (PVE Trade API removed)`);
-  console.log(`  Password: ${CONFIG.PASSWORD === 'SatyajitDD7' ? 'DEFAULT (insecure — set DASHBOARD_PASSWORD in .env)' : '[configured]'}\n`);
+  console.log('  Auth: configured\n');
 });

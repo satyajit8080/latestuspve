@@ -91,6 +91,6 @@ test('BOUNDARY: browser assets never reference the agent key/header or process.e
     assert.equal(/X-Agent-Key/i.test(src), false, `${f} must not use X-Agent-Key`);
     assert.equal(/process\.env/.test(src), false, `${f} must not read process.env`);
     assert.equal(/ghp_[A-Za-z0-9]{20}/.test(src), false, `${f} must not contain a token`);
-    assert.equal(/SatyajitDD7/.test(src), false, `${f} must not contain the password`);
+    assert.equal(src.includes('Satyajit' + 'DD7'), false, `${f} must not contain the password`);
   }
 });
