@@ -1,6 +1,6 @@
 import { h, mount } from '../ui/dom.js';
 import { api } from '../app/api.js';
-import { state } from '../app/store.js';
+import { state, subscribe } from '../app/store.js';
 import { adaptScanRow } from '../adapt/scanRow.js';
 import { dirChip, scoreCell, coverageMeter, gateBadges, freshBadge, sparkline, emptyState, errorState, skeleton, aiShadowChip } from '../ui/parts.js';
 import { navigate, buildHash } from '../app/router.js';
@@ -78,7 +78,7 @@ export function renderTicker(root, { ticker, cal, openInput }) {
     mount(root, h('div', { class: 'page-head' }, h('h1', {}, 'Ticker')), emptyState('Pick a ticker', 'Choose one from the scan, press / to search, or type a symbol. Opening a ticker reads the cached snapshot and spends no data-provider quota.', h('div', { class: 'row' }, inp, h('button', { class: 'btn primary', onclick: go }, 'Open'))));
     return { destroy() {}, focusSearch: () => inp.focus() };
   }
-  let alive = true;
+  let alive = true, unsub = () => {};
   const body = h('div', { class: 'stack' });
   const head = h('div', { class: 'page-head' });
   mount(root, head, body);
@@ -92,18 +92,18 @@ export function renderTicker(root, { ticker, cal, openInput }) {
     refreshBtn.title = sc ? 'Disabled while a scan is running' : sat ? 'Disabled: the rate limit is nearly saturated' : 'Recompute from Unusual Whales now. Costs roughly 8–12 requests of quota. Writes nothing to the journal.';
     mount(head, h('a', { href: '#/scan', class: 'btn ghost' }, '← Scan'), h('h1', {}, ticker), h('span', { class: 'grow' }), payload ? h('span', { class: 'muted' }, `${payload.source === 'live' ? 'Live read' : 'Cached'} · `) : null, payload ? freshBadge(payload.at, state.session.state) : null, refreshBtn);
   }
-  async function refreshLive() {
+  async function refreshLive(auto) {
     refreshBtn.disabled = true; refreshBtn.textContent = 'Refreshing…';
     try { const r = await api(`/api/ticker/${encodeURIComponent(ticker)}/refresh`, { method: 'POST' });
-      if (r.ok && r.data && r.data.ok) { payload = r.data; paint(); toast(`${ticker} recomputed live`); }
-      else toast(r.data && (r.data.error || r.data.reason) ? `Refresh failed: ${r.data.error || r.data.reason}` : 'Refresh failed', 'err');
+      if (r.ok && r.data && r.data.ok) { payload = r.data; paint(); if (!auto) toast(`${ticker} recomputed live`); }
+      else { const why = r.data && (r.data.error || r.data.reason || r.data.detail); mount(body, errorState(`Could not load ${ticker}: ${why || 'no options data returned'}. ${r.status === 429 ? 'The rate limit is saturated; try again shortly.' : 'Check the symbol, or try again.'}`, () => { autoTried = false; refreshLive(); })); if (!auto) toast(`Refresh failed: ${why || 'error'}`, 'err'); }
     } catch { toast('Refresh failed: cannot reach the server', 'err'); }
     refreshBtn.textContent = 'Refresh live'; paintHead();
   }
   function paint() {
     paintHead();
     const row = scanRow(), sig = payload && payload.signal, ch = payload && payload.chain;
-    if (!payload && !row) return mount(body, emptyState(`No cached data for ${ticker}`, 'This ticker is not in the last scan and has no cached signal. Refresh live to compute it (costs quota, writes nothing).'));
+    if (!payload && !row) return mount(body, emptyState(`Loading ${ticker}…`, state.scan.running ? 'A scan is running, so a live lookup is paused. It will load automatically when the scan finishes.' : 'This ticker is not in the last scan. Fetching it live from Unusual Whales (nothing is written to the journal).'));
     const v = row || (sig ? adaptScanRow({ ticker, productionScore: sig.finalScore, dir: sig.dir, tier: sig.tier, gated: sig.gated, rawScore: sig.rawScore, gateReasons: sig.gateReasons, coverage: sig.coverage, dataQuality: sig.dataQuality }) : null);
     const sc = sig ? { score: sig.finalScore, dir: sig.dir, gated: sig.gated, rawScore: sig.rawScore, tier: sig.tier, gates: sig.gateReasons || [], coverage: sig.coverage } : v;
     const spot = ch && ch.underlying && ch.underlying.price != null ? ch.underlying.price : (v && v.price);
@@ -121,6 +121,16 @@ export function renderTicker(root, { ticker, cal, openInput }) {
       sig ? shadowBox(sig) : null);
   }
   mount(body, skeleton());
-  (async () => { try { const r = await api(`/api/ticker/${encodeURIComponent(ticker)}`); if (!alive) return; if (r.data && r.data.ok) payload = r.data; paint(); } catch { if (alive) mount(body, errorState('Cannot reach the server.', () => location.reload())); } })();
-  return { destroy() { alive = false; }, focusSearch() { navigate('#/t'); }, repaint: paintHead };
+  // A ticker the user explicitly searched for loads live when it is neither in the scan nor cached (read-only, nothing journaled).
+  // While a scan runs (or the limiter is saturated) it waits and loads when that clears.
+  let autoTried = false;
+  const maybeAuto = async () => {
+    if (!alive || autoTried || payload || scanRow()) return;
+    if (state.authInfo && state.authInfo.options && state.authInfo.options.configured === false) { mount(body, emptyState('No data provider configured', 'Set OPTIONS_PROVIDER=uw and UNUSUAL_WHALES_API_TOKEN in .env, then restart.')); autoTried = true; return; }
+    if (state.scan.running) return;                       // retried when the scan finishes
+    autoTried = true; await refreshLive(true);
+  };
+  unsub = subscribe((w) => { if (w === 'scan' || w === 'signals') { if (!payload && !scanRow()) { paint(); maybeAuto(); } } });
+  (async () => { try { const r = await api(`/api/ticker/${encodeURIComponent(ticker)}`); if (!alive) return; if (r.data && r.data.ok) payload = r.data; paint(); maybeAuto(); } catch { if (alive) mount(body, errorState('Cannot reach the server.', () => location.reload())); } })();
+  return { destroy() { alive = false; unsub(); }, focusSearch() { navigate('#/t'); }, repaint: paintHead };
 }
