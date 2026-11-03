@@ -78,7 +78,7 @@ export function toRows(records, horizon = '30m') {
     const ctx = r.context || {};
     out.push({
       id: r.id, ticker: r.ticker, firedAt: r.firedAt,
-      score: r.composite.finalScore, shadow: isNum(r.shadowScore) ? r.shadowScore : null,
+      score: r.composite.finalScore,
       v2Score: (r.v2 && isNum(r.v2.score)) ? r.v2.score : null, v2State: r.v2 ? r.v2.state : null,
       dir: r.composite.dir, ret: o.directionalReturnPct, atrRet: o.atrNormalizedReturn,
       mfe: o.maxFavorablePct, mae: o.maxAdversePct, outcome: o.outcome,
@@ -97,7 +97,6 @@ export function baselineReport(records, { horizons = ['15m', '30m', '60m', 'clos
     byHorizon[h] = {
       ...statsOf(rows),
       rankIC: rankIC(rows.map((r) => ({ score: r.score, ret: r.ret }))),
-      shadowRankIC: rankIC(rows.filter((r) => isNum(r.shadow)).map((r) => ({ score: r.shadow, ret: r.ret }))),
       // v2 vs v1 head-to-head on the SAME observations (spec §28: our data decides)
       v2RankIC: rankIC(rows.filter((r) => isNum(r.v2Score)).map((r) => ({ score: r.v2Score, ret: r.ret }))),
       v2TopDecile: topDecilePrecision(rows.filter((r) => isNum(r.v2Score)).map((r) => ({ score: r.v2Score, ret: r.ret }))),

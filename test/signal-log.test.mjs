@@ -14,7 +14,7 @@ const readAll = () => fs.readdirSync(DIR).filter((f) => f.endsWith('.jsonl')).fl
 // carrying the PVE display override (gex = pve value); scoredAgg carries the chain-computed value.
 const makeSig = (over = {}) => ({
   finalScore: 72, dir: 'bull', tier: 'Moderate', primary: 75, optionsScore: 80, stockScore: 40,
-  predictionMarketScore: null, pveState: 'none', pveFactor: 1.0, dataQuality: 100, gexSource: 'pve',
+  predictionMarketScore: null, pveState: 'none', pveFactor: 1.0, dataQuality: 100, gexSource: 'uw',
   ivRank: 55, ivPercentile: 60, walls: { call: 200, put: 180 },
   agg: { gex: 1_536_000_000, gammaFlip: 190, maxPain: 195 },      // (B) PVE-overridden display values
   features: [
@@ -28,7 +28,7 @@ const scoredAgg = { gex: 4_920_000, gammaFlip: 188, maxPain: 195, cpVolRatio: 1.
 const underlying = { price: 191.2, prevClose: 188.0, volume: 5e6, available: true };
 const providerNoFlow = { name: 'pve' }; // no getFlowDetailed → shadowOnly.flow stays null (honest)
 
-test('separates A (scored) / B (displayed-not-scored) / C (shadow-only) with no ambiguous field', async () => {
+test('separates A (scored) / B (displayed-not-scored) with no ambiguous field', async () => {
   await logSignal({ provider: providerNoFlow, ticker: 'AAA', sig: makeSig(), scoredAgg, underlying, prevHadSnapshot: false, now: new Date('2026-08-24T14:03:00Z') });
   const [r] = readAll();
   assert.equal(r.schemaVersion, SIGNAL_LOG_SCHEMA);
@@ -37,19 +37,14 @@ test('separates A (scored) / B (displayed-not-scored) / C (shadow-only) with no 
   assert.equal(r.scored.oiChangeAvailable, false);           // cold start recorded honestly
   assert.ok(r.scored.components.find((c) => c.key === 'cpVolume').scored === true);
   assert.deepEqual(r.scored.activeComponents, ['cpVolume']); // directional + aligned with bull
-  // (B) displayed-not-scored: PVE override is a SEPARATE field, not merged with the scored value
-  assert.equal(r.displayedNotScored.gexPveOverride, 1_536_000_000);
-  assert.equal(r.displayedNotScored.gexSource, 'pve');
+  // (B) displayed-not-scored: the UW GEX override is a SEPARATE field, not merged with the scored value
+  assert.equal(r.displayedNotScored.gexOverride, 1_536_000_000);
+  assert.equal(r.displayedNotScored.gexSource, 'uw');
   assert.equal(r.displayedNotScored.ivRank, 55);
   assert.equal(r.displayedNotScored.maxPain, 195);
-  assert.notEqual(r.scored.gexChainComputed, r.displayedNotScored.gexPveOverride); // the whole point
-  // (C) shadow-only present + labelled, null when no flow provider
-  assert.equal(r.shadowOnly.flow, null);
-  assert.match(r.shadowOnly.note, /not used in production/i);
-  // req 1: 1h explicitly unavailable; 1d/1w pending
-  assert.equal(r.forward['1h'].status, 'unavailable');
-  assert.match(r.forward['1h'].note, /intraday/i);
-  assert.equal(r.forward['1d'].status, 'pending');
+  assert.notEqual(r.scored.gexChainComputed, r.displayedNotScored.gexOverride); // the whole point
+  // removed in signal-log-1.1.0: pve{}, shadowOnly{}, shadowScore, forward{}
+  for (const k of ['pve', 'shadowOnly', 'shadowScore', 'forward']) assert.equal(k in r, false, k + ' must not be written');
   assert.equal(r.entryPrice, 191.2);
 });
 
@@ -71,24 +66,11 @@ test('skips neutral signals (req 3: dir != neutral only)', async () => {
 test('fire-and-forget safety: never throws, even with garbage input (req 10)', async () => {
   await assert.doesNotReject(logSignal({ ticker: 'DDD', sig: null }));
   await assert.doesNotReject(logSignal({}));
-  // shadow flow provider that throws must not break logging
-  const badProvider = { name: 'pve', getFlowDetailed: async () => { throw new Error('boom'); } };
-  await logSignal({ provider: badProvider, ticker: 'EEE', sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T17:00:00Z') });
-  const [r] = readAll().filter((x) => x.ticker === 'EEE');
-  assert.equal(r.shadowOnly.flow, null);                     // flow fetch failed → null, record still written
-});
-
-test('logs shadow sweep/flow when the provider supplies it (C bucket populated)', async () => {
-  // flow is passed in (already fetched by the pipeline): logSignal must not make a second UW call
-  const flowDetailed = { available: true, largeTrades: [{ premium: 3e6, size: 1500, right: 'call', direction: 'buy', golden: true, dte: 25, otm_percent: 4, isOpening: true }] };
-  await logSignal({ flowDetailed, ticker: 'FFF', sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T18:00:00Z') });
-  const [r] = readAll().filter((x) => x.ticker === 'FFF');
-  assert.equal(r.shadowOnly.flow.available, true);
-  assert.ok(r.shadowOnly.flow.goldenCount >= 1);
-  assert.equal(r.scored.activeComponents.includes('gexContext'), false); // gexContext is non-directional → not "active"
+  await logSignal({ ticker: 'EEE', sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T17:00:00Z') });
+  assert.equal(readAll().filter((x) => x.ticker === 'EEE').length, 1);   // record still written
 });
 
 test('no secret leakage in records', () => {
   const blob = JSON.stringify(readAll());
-  assert.ok(!/pve_live_|SECRET|Bearer|sk-or-/.test(blob));
+  assert.ok(!/SECRET|Bearer|sk-or-/.test(blob));
 });

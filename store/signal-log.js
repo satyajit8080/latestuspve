@@ -13,16 +13,14 @@
  * SOURCE DISTINCTION (req 7) — three explicitly separated buckets per record:
  *   scored[]            (A) values actually used in production scoring (incl. chain-computed GEX)
  *   displayedNotScored  (B) values computed/overridden for display but NOT used in the score
- *                            (PVE GEX override, gamma-flip/walls override, IV-rank, max-pain)
- *   shadowOnly          (C) experimental shadow classification (sweep/flow) — never used in scoring
+ *                            (UW GEX override, gamma-flip/walls override, IV-rank, max-pain)
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { OPTIONS_FEATURE_DEFS } from '../public/options-engine.js';
 import { explainSignal, reasonCodes, JOURNAL_MIN_SCORE, CHECKPOINTS } from './journal.js';
-import { computeFlowQuality } from '../shadow/engine.js';
 
-export const SIGNAL_LOG_SCHEMA = 'signal-log-1.0.0';
+export const SIGNAL_LOG_SCHEMA = 'signal-log-1.1.0';   // 1.1.0: removed pve{}, shadowOnly{}, shadowScore, forward{} (old rows stay readable)
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const DIR_KEYS = Object.entries(OPTIONS_FEATURE_DEFS).filter(([, d]) => d.directional).map(([k]) => k);
 
@@ -58,10 +56,10 @@ function _dedupe(id) {
 /**
  * Fire-and-forget. Call as: void logSignal({ provider, ticker, sig, scoredAgg, prevHadSnapshot, now }).
  * @param {{provider?:object, ticker:string, sig:object, scoredAgg:object, underlying?:object, prevHadSnapshot?:boolean, now?:Date}} args
- *   scoredAgg = snapshot of sig.agg taken BEFORE the PVE gex/iv overrides (so we log the values the
+ *   scoredAgg = snapshot of sig.agg taken BEFORE the UW gex/iv overrides (so we log the values the
  *   score actually used, immune to the later display override).
  */
-export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, shadowScore = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null, flowDetailed = null } = {}) {
+export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null } = {}) {
   try {
     if (!sig || !ticker) return;
     const dir = sig.dir;
@@ -83,15 +81,11 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
     })) : [];
     const activeScored = components.filter((c) => c.directional && c.avail && isNum(c.strength) && c.strength > 0 && (c.dir === 1 && dir === 'bull' || c.dir === -1 && dir === 'bear')).map((c) => c.key);
 
-    // (C) shadow-only sweep/flow classification — experimental; off the response path; best-effort.
-    let shadowFlow = null;
-    try { if (flowDetailed && flowDetailed.available) { const fq = computeFlowQuality({ available: true, trades: flowDetailed.largeTrades }); shadowFlow = { available: !!fq.available, quality: isNum(fq.score) ? Math.round(fq.score) : null, direction: fq.direction, netSignedPremium: fq.netSignedPremium, goldenCount: fq.goldenCount, sweepSampleSize: fq.sampleSize }; } } catch { shadowFlow = null; }   // reuses the flow already fetched: no second UW call
 
     const rec = {
       schemaVersion: SIGNAL_LOG_SCHEMA, id, firedAt: firedAt.toISOString(), ticker: String(ticker).toUpperCase(),
       signalType: 'options', optionsEngineVersion: sig.optionsEngineVersion || null,
       composite: { finalScore: sig.finalScore, dir, tier: sig.tier, primary: sig.primary, optionsScore: sig.optionsScore, stockScore: sig.stockScore, dataQuality: sig.dataQuality },
-      pve: { predictionMarketScore: sig.predictionMarketScore ?? null, pveState: sig.pveState ?? null, pveFactor: sig.pveFactor ?? null }, // currently inert (~1.0); see store/SIGNAL_LOG.md
       scored: {                                                 // (A) used in production scoring
         gexChainComputed: isNum(scoredAgg.gex) ? scoredAgg.gex : null,
         atmIV: isNum(scoredAgg.atmIV) ? scoredAgg.atmIV : null,
@@ -104,7 +98,7 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
         components, activeComponents: activeScored,
       },
       displayedNotScored: {                                     // (B) computed/overridden, NOT scored
-        gexPveOverride: isNum(a.gex) ? a.gex : null, gexSource: sig.gexSource || null,
+        gexOverride: isNum(a.gex) ? a.gex : null, gexSource: sig.gexSource || null,
         gammaFlip: isNum(a.gammaFlip) ? a.gammaFlip : null,
         callWall: sig.walls ? (sig.walls.call ?? null) : null, putWall: sig.walls ? (sig.walls.put ?? null) : null,
         ivRank: isNum(sig.ivRank) ? sig.ivRank : null, ivPercentile: isNum(sig.ivPercentile) ? sig.ivPercentile : null,
@@ -112,9 +106,7 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
         price: isNum(price) ? price : null,
         prevClose: under && isNum(under.prevClose) ? under.prevClose : null,
       },
-      shadowOnly: { flow: shadowFlow, note: 'experimental; NOT used in production scoring' },   // (C)
       entryPrice: isNum(price) ? price : null,
-      shadowScore: isNum(shadowScore) ? shadowScore : null,
       // Signal Journal: exact state at generation time (never rewritten by later analysis)
       entry: {
         stockPrice: isNum(price) ? price : null,
@@ -140,11 +132,6 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
       outcomes: CHECKPOINTS.reduce((o, h) => { o[h] = { status: 'pending' }; return o; }, {}),
       v2: v2 || null,       // shadow scorer output (spec phases 2-5); never affects production
       postAnalysis: null,   // written only after outcomes resolve; never modifies the fields above
-      forward: {
-        '1h': { price: null, ret: null, status: 'unavailable', note: 'OPTIONS_PROVIDER has no intraday historical data' }, // req 1
-        '1d': { price: null, ret: null, status: 'pending' },
-        '1w': { price: null, ret: null, status: 'pending' },
-      },
       resolved: false,
     };
 

@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import { labelMultiHorizon } from '../research/labeler.js';
 import { buildDataset, DATASET_FEATURES } from '../research/dataset.js';
 import { walkForwardSplits, verifyNoLeakage, scoreBuckets, featureDecisionTable, performanceSummary, breakdownBy } from '../research/validate.js';
-import { permutationImportance, univariateCorrelations } from '../research/importance.js';
 import { mulberry32, sharpe, maxDrawdown, bootstrapCI } from '../research/stats.js';
 
 test('labelMultiHorizon: per-horizon MFE/MAE + target/adverse timing, no look-ahead', () => {
@@ -73,16 +72,6 @@ test('featureDecisionTable: planted feature earns edge, noise does not; thin sam
   const thin = featureDecisionTable(rows.slice(0, 50), ['plantedEdge'], { horizon: 5, minSample: 200 });
   assert.equal(thin[0].decision, 'SHADOW ONLY');
   assert.equal(thin[0].incrementalValue, 'INSUFFICIENT DATA');
-});
-
-test('permutationImportance: planted feature ranks above noise (offline ML)', () => {
-  const { rows } = datasetFromSynthetic(syntheticRows(600));
-  const withRet = rows.filter((r) => r.labels.byHorizon[5].insufficient === false).map((r) => ({ plantedEdge: r.plantedEdge, noiseFeature: r.noiseFeature, __ret: r.labels.byHorizon[5].ret }));
-  const imp = permutationImportance(withRet, ['plantedEdge', 'noiseFeature'], (r) => r.__ret);
-  assert.equal(imp.insufficient, false);
-  const p = imp.importances.find((x) => x.feature === 'plantedEdge').importance;
-  const nz = imp.importances.find((x) => x.feature === 'noiseFeature').importance;
-  assert.ok(p >= nz, `planted importance ${p} !>= noise ${nz}`);
 });
 
 test('buildDataset: coverage reporting + null-safety (never fabricates)', () => {

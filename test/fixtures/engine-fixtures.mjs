@@ -72,8 +72,7 @@ export function captureBaseline(sig) {
   const a = sig.agg || {};
   return {
     finalScore: sig.finalScore, dir: sig.dir, tier: sig.tier,
-    optionsScore: sig.optionsScore, stockScore: sig.stockScore, predictionMarketScore: sig.predictionMarketScore,
-    pveFactor: sig.pveFactor, pveState: sig.pveState, dataQuality: sig.dataQuality, primary: sig.primary,
+    optionsScore: sig.optionsScore, stockScore: sig.stockScore, dataQuality: sig.dataQuality, primary: sig.primary,
     agg: { gex: a.gex, gammaFlip: a.gammaFlip, maxPain: a.maxPain, cpVolRatio: a.cpVolRatio, cpOIRatio: a.cpOIRatio, volOIRatio: a.volOIRatio, atmIV: a.atmIV, strikeConcentration: a.strikeConcentration, avgSpread: a.avgSpread },
   };
 }

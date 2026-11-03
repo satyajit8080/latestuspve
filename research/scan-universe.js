@@ -70,11 +70,11 @@ export async function computeRow(P, ticker, opt) {
 }
 
 export async function main() {
-  const key = process.env.OPTIONS_API_KEY || process.env.UNUSUAL_WHALES_API_TOKEN;
+  const key = process.env.UNUSUAL_WHALES_API_TOKEN;
   const dir = process.env.SCAN_DIR || path.join(ROOT, 'research-data', 'scan');
   const limit = Math.max(1, Math.min(500, Number(process.env.SCAN_LIMIT || 500)));   // universe size (UW screener cap)
   const gap = Number(process.env.SCAN_GAP_MS || 400);
-  if (!key) { console.error('OPTIONS_API_KEY required.'); process.exit(1); }
+  if (!key) { console.error('UNUSUAL_WHALES_API_TOKEN required.'); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
 
   const { makeOptionsProvider } = await import('../providers/options.js');

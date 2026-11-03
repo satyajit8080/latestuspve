@@ -62,3 +62,10 @@ test('bad inputs return insufficient without throwing', () => {
   assert.equal(labelOutcome({ bars, entryDate: 'nope', direction: 'bull' }).insufficient, true);
   assert.equal(labelOutcome({ bars, entryIndex: 0, entryPrice: 0 }).insufficient, true);
 });
+
+test('forward labeling ignores the entry bar (no leakage into the signal window)', async () => {
+  const { labelMultiHorizon } = await import('../research/labeler.js');
+  const bars = [{ date: '2026-08-17', high: 200, low: 1, close: 100 }, { date: '2026-08-18', high: 103, low: 99, close: 102 }, { date: '2026-08-19', high: 104, low: 101, close: 103 }];
+  const r = labelMultiHorizon({ bars, entryIndex: 0, direction: 'bull', horizons: [2] });
+  assert.ok(r.byHorizon[2].mfePct < 50 && r.byHorizon[2].maePct > -50);   // the entry bar's 200/1 extremes must not appear
+});

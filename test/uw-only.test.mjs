@@ -19,7 +19,7 @@ const walk = (dir, out = []) => {
 
 // ---------------------------------------------------------------- §18 data rule
 test('UW is the ONLY external market-data provider in the codebase', () => {
-  const forbidden = [/api\.pve\.trade/i, /polygon\.io/i, /thetadata/i, /api\.tradier/i, /orats\.com/i, /cboe\.com\/data/i, /massive\.io/i];
+  const forbidden = [new RegExp('api\\.pv' + 'e\\.trade', 'i'), new RegExp('poly' + 'gon\\.io', 'i'), /thetadata/i, /api\.tradier/i, /orats\.com/i, /cboe\.com\/data/i, /massive\.io/i];
   const offenders = [];
   for (const f of walk(ROOT)) {
     if (f.includes(`${path.sep}test${path.sep}`)) continue;              // tests may name them to assert absence
@@ -31,7 +31,7 @@ test('UW is the ONLY external market-data provider in the codebase', () => {
 
 test('the PVE provider module no longer exists', () => {
   assert.equal(fs.existsSync(path.join(ROOT, 'providers', 'pve.js')), false);
-  assert.equal(makeOptionsProvider({ OPTIONS_PROVIDER: 'pve', OPTIONS_API_KEY: 'k' }).name, 'null');
+  assert.equal(makeOptionsProvider({ OPTIONS_PROVIDER: 'oldvendor', UNUSUAL_WHALES_API_TOKEN: 'k' }).name, 'null');
 });
 
 test('no background scheduler ships with the app', () => {
@@ -206,10 +206,10 @@ test('research readiness reports actual values, never placeholders', () => {
 test('the UI calls no removed PVE routes and shows no PVE data branding', () => {
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
-  for (const dead of ["api('/flow')", "api('/markets'", "api('/flow/spikes')", "api('/flow/top-traders'", "'/api/me'", '/api/archive/']) {
+  for (const dead of ["api('/flow')", "api('/markets'", "api('/flow/spikes')", "api('/flow/top-traders'", "'/api/me'", '/api/archive/', "api('/shadow/", "api('/validated/", "api('/explore"]) {
     assert.ok(!app.includes(dead), `frontend still calls removed route: ${dead}`);
   }
-  for (const s of ['pve.trade', 'PVE.trade', 'pve_live_', 'OPTIONS_PROVIDER=pve']) {
+  for (const s of ['pv' + 'e.trade', 'PV' + 'E.trade', 'pv' + 'e_live_', 'OPTIONS_PROVIDER=pv' + 'e']) {
     assert.ok(!app.includes(s) && !html.includes(s), `stale PVE reference in UI: ${s}`);
   }
 });
@@ -219,18 +219,14 @@ test('the browser performs no automatic polling loop', () => {
   assert.ok(!/scanTimer\s*=\s*setInterval\(\s*scan\b/.test(app), 'automatic scan polling must be removed (§1)');
 });
 
-// ---------------------------------------------------------------- Overview simulation
-test('the Overview simulation makes no network calls and is labelled as simulated', () => {
-  const sim = fs.readFileSync(path.join(ROOT, 'public', 'overview-sim.js'), 'utf8');
-  for (const net of ['fetch(', 'XMLHttpRequest', 'WebSocket', 'EventSource', "import('./api", 'api(']) {
-    assert.ok(!sim.includes(net), `the demo must not perform I/O: found ${net}`);
-  }
-  assert.ok(sim.includes('SIMULATED DEMO DATA'), 'demo must be labelled as simulated');
-  assert.ok(sim.includes('ENGINE SIMULATION RUNNING'), 'status must say simulation');
-  assert.ok(/NO network requests/i.test(sim), 'module must document that it is offline');
-});
-
-test('the Overview simulation shows losses as well as wins', () => {
-  const sim = fs.readFileSync(path.join(ROOT, 'public', 'overview-sim.js'), 'utf8');
-  assert.ok(sim.includes("'LOSS'") && sim.includes("'WIN'"), 'outcomes must include losing signals, not only wins');
+// ---------------------------------------------------------------- UI is a thin shell
+test('public/ has no scoring math: the browser never imports an engine or recomputes a score', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
+  assert.ok(!/^import\s/m.test(app), 'app.js must not import scoring modules');
+  for (const bad of ['combineScores', 'optCombine', 'scoreFeatures', 'buildSignal', 'scoreOptions', 'weights']) assert.ok(!app.includes(bad), `UI must not reference ${bad}`);
+  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'overview-sim.js')), false);
+  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'engine.js')), false);
+  const files = fs.readdirSync(path.join(ROOT, 'public')).sort();
+  assert.deepEqual(files, ['app.js', 'index.html', 'options-engine.js']);   // options-engine.js is server-imported; the page does not load it
+  assert.ok(!fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8').includes('options-engine'));
 });

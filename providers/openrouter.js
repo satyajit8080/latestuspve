@@ -50,7 +50,7 @@ export function configFromEnv(env = {}) {
     },
     fallbackModel: env.OPENROUTER_FALLBACK_MODEL || null,
     structured: env.AI_STRUCTURED ? env.AI_STRUCTURED !== 'false' : true,   // prefer native JSON mode; falls back to text parser
-    enabled: (env.AI_ENABLED ? env.AI_ENABLED !== 'false' : true) && !!env.OPENROUTER_API_KEY,
+    enabled: env.AI_ENABLED === 'true' && !!env.OPENROUTER_API_KEY,   // OFF by default: must be opted in with AI_ENABLED=true
     timeoutMs: Number(env.OPENROUTER_TIMEOUT_MS || 30000),
     cacheTtlMs: Number(env.AI_CACHE_TTL_MS || 600000),      // 10 min
     maxTokens: Number(env.OPENROUTER_MAX_TOKENS || 1200),
@@ -72,7 +72,7 @@ export class OpenRouterClient {
       if (opts.responseFormat) payload.response_format = opts.responseFormat;  // native structured output when requested
       const res = await fetch(BASE, {
         method: 'POST', signal: ctl.signal,
-        headers: { Authorization: `Bearer ${this.cfg.apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'PVE Signal Engine' },
+        headers: { Authorization: `Bearer ${this.cfg.apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'Options Signal Engine' },
         body: JSON.stringify(payload),
       });
       if (!res.ok) { let msg = `OpenRouter HTTP ${res.status}`; try { const b = await res.json(); if (b && b.error) msg = b.error.message || msg; } catch {} throw new Error(msg); }

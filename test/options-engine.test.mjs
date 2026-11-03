@@ -87,22 +87,18 @@ test('dataQuality: full chain AVAILABLE; chain-only PARTIAL; none UNAVAILABLE', 
   assert.equal(dataQualityScore({ fieldsAvailable: {} }).status, 'UNAVAILABLE');
 });
 
-test('combine: options+stock are PRIMARY; PVE only adjusts, never reverses', () => {
-  const base = { optionsScore: 80, optionsDir: 'bull', stockScore: 70, stockDir: 'bull', dataQuality: 100 };
-  const none = combineScores({ ...base, predictionMarketScore: null });
-  const agree = combineScores({ ...base, predictionMarketScore: 90, predictionMarketDir: 'bull' });
-  const disagree = combineScores({ ...base, predictionMarketScore: 90, predictionMarketDir: 'bear' });
-  assert.equal(agree.dir, 'bull'); assert.equal(disagree.dir, 'bull'); // direction never flips
-  assert.ok(agree.finalScore > none.finalScore, 'agreement boosts');
-  assert.ok(disagree.finalScore < none.finalScore, 'disagreement reduces');
-  assert.equal(disagree.pveState, 'disagree');
-  // PVE cannot dominate: factor within [floor,cap]
-  assert.ok(disagree.pveFactor >= 0.8 && agree.pveFactor <= 1.15);
+test('combine: stock confirmation is signed — agreement boosts, disagreement penalises, direction comes from options', () => {
+  const base = { optionsScore: 80, optionsDir: 'bull', dataQuality: 100 };
+  const agree = combineScores({ ...base, stockScore: 70, stockDir: 'bull' });
+  const none = combineScores({ ...base, stockScore: 70, stockDir: 'neutral' });
+  const disagree = combineScores({ ...base, stockScore: 70, stockDir: 'bear' });
+  assert.equal(agree.dir, 'bull'); assert.equal(disagree.dir, 'bull');
+  assert.ok(agree.finalScore > none.finalScore && none.finalScore > disagree.finalScore);
+  assert.equal(agree.stockConfirm, 1); assert.equal(disagree.stockConfirm, -1);
 });
 
-test('combine: options has substantially greater influence than PVE', () => {
-  // With PVE unavailable, final tracks the options-weighted primary closely (dq=100)
-  const r = combineScores({ optionsScore: 90, optionsDir: 'bull', stockScore: 90, stockDir: 'bull', dataQuality: 100, predictionMarketScore: null });
+test('combine: options evidence dominates', () => {
+  const r = combineScores({ optionsScore: 90, optionsDir: 'bull', stockScore: 90, stockDir: 'bull', dataQuality: 100 });
   assert.ok(r.finalScore >= 85);
 });
 
@@ -113,16 +109,16 @@ test('buildOptionsSignal: insufficient when no real chain (no fabricated signal)
 });
 
 test('buildOptionsSignal: full pipeline yields tiered options-primary signal', () => {
-  const sig = buildOptionsSignal(chainFixture(), { predictionMarket: { score: 70, dir: 'bull' }, underlyingHist: [98, 99, 100] });
+  const sig = buildOptionsSignal(chainFixture(), { underlyingHist: [98, 99, 100] });
   assert.equal(sig.insufficient, false);
   assert.equal(sig.tier, scoreTier(sig.finalScore));
   assert.equal(sig.dir, 'bull');
   assert.ok(isFinite(sig.optionsScore) && isFinite(sig.stockScore));
-  assert.equal(sig.pveState, 'agree');
+  assert.equal(sig.stockConfirm, 1);   // bug fix: stockConfirm is exposed on the built signal
 });
 
 test('replay determinism: snapshot reproduces identical options signal without live API', () => {
-  const ctx = { predictionMarket: { score: 70, dir: 'bull' }, underlyingHist: [98, 99, 100] };
+  const ctx = { underlyingHist: [98, 99, 100] };
   const sig = buildOptionsSignal(chainFixture(), ctx);
   const snap = captureOptionsSnapshot(chainFixture(), ctx, {}, 1234);
   const rep = replayOptionsSignal(snap);

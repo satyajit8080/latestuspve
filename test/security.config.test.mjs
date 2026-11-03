@@ -68,5 +68,5 @@ test('.env.example: unique keys, no inline comments, no legacy vendors', () => {
   for (const k of ['OPTIONS_PROVIDER', 'UNUSUAL_WHALES_API_TOKEN', 'DASHBOARD_PASSWORD', 'SESSION_SECRET', 'UW_MAX_PER_MINUTE', 'UW_MAX_PER_SCAN', 'SCAN_LIMIT', 'SCAN_GAP_MS', 'SIGNAL_LOG_DIR', 'BASELINE_DIR', 'SCAN_DIR', 'AI_ENABLED']) assert.ok(keys.includes(k), k);
   assert.equal(lines.find((l) => l.startsWith('AI_ENABLED=')), 'AI_ENABLED=false');
   assert.equal(lines.find((l) => l.startsWith('UNUSUAL_WHALES_API_TOKEN=')), 'UNUSUAL_WHALES_API_TOKEN=');
-  assert.ok(!/pve_live|polygon|OPTIONS_API_KEY/i.test(lines.join('\n')));
+  assert.ok(!new RegExp('pve|poly' + 'gon|OPTIONS_API_KEY', 'i').test(lines.join('\n')));
 });

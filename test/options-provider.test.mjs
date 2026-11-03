@@ -9,18 +9,16 @@ test('NullOptionsProvider returns unavailable chain (never fabricates)', async (
   assert.equal(r.chain.fieldsAvailable.chain, false);
 });
 
-test('a legacy OPTIONS_PROVIDER=pve env migrates to UW when a token exists', () => {
-  const st = optionsProviderStatus({ OPTIONS_PROVIDER: 'pve', UNUSUAL_WHALES_API_TOKEN: 'tok1234' });
-  assert.equal(st.provider, 'uw');
-  assert.equal(st.configured, true);
-  const dead = optionsProviderStatus({ OPTIONS_PROVIDER: 'pve', OPTIONS_API_KEY: 'pve_live_x' });
-  assert.equal(dead.configured, false);
-  assert.match(dead.reason, /no longer supported/i);
+test('only uw is supported; any other OPTIONS_PROVIDER value is unconfigured', () => {
+  const st = optionsProviderStatus({ OPTIONS_PROVIDER: 'oldvendor', UNUSUAL_WHALES_API_TOKEN: 'tok1234' });
+  assert.equal(st.configured, false);
+  assert.match(st.reason, /unknown OPTIONS_PROVIDER/i);
+  assert.equal(optionsProviderStatus({ OPTIONS_PROVIDER: 'uw', UNUSUAL_WHALES_API_TOKEN: 'tok1234' }).configured, true);
 });
 
 test('makeOptionsProvider: env-driven selection (uw | null)', () => {
   assert.equal(makeOptionsProvider({}).name, 'null');
-      assert.equal(makeOptionsProvider({ OPTIONS_PROVIDER: 'polygon', OPTIONS_API_KEY: 'k' }).name, 'null'); // removed → null
+      assert.equal(makeOptionsProvider({ OPTIONS_PROVIDER: 'oldvendor', UNUSUAL_WHALES_API_TOKEN: 'k' }).name, 'null'); // unsupported -> null
 });
 
 test('optionsProviderStatus reflects config', () => {

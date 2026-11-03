@@ -145,3 +145,11 @@ test('structured output: happy path returns without fallback', async () => {
   try { const r = await c.chat({ messages: [], responseFormat: { type: 'json_object' } }); assert.equal(r.ok, true); assert.equal(r.structuredFallback, undefined); }
   finally { globalThis.fetch = real; }
 });
+
+test('AI is OFF by default: a key alone does not enable it; AI_ENABLED=true is required', async () => {
+  const { configFromEnv } = await import('../providers/openrouter.js');
+  assert.equal(configFromEnv({ OPENROUTER_API_KEY: 'k' }).enabled, false);
+  assert.equal(configFromEnv({ OPENROUTER_API_KEY: 'k', AI_ENABLED: 'false' }).enabled, false);
+  assert.equal(configFromEnv({ AI_ENABLED: 'true' }).enabled, false);                       // no key
+  assert.equal(configFromEnv({ OPENROUTER_API_KEY: 'k', AI_ENABLED: 'true' }).enabled, true);
+});

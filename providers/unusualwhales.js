@@ -1,7 +1,7 @@
 // @ts-check
 /*
- * providers/unusualwhales.js — Unusual Whales v1 provider. Drop-in for PveOptionsProvider: same
- * method interface + normalized shapes, so production scoring is untouched. Field mappings below are
+ * providers/unusualwhales.js — Unusual Whales v1 provider. Normalizes every response to one shape
+ * so production scoring never sees raw UW payloads. Field mappings below are
  * LOCKED against real responses captured by scripts/uw-diagnostic.mjs (2026-08-24). Base
  * https://api.unusualwhales.com, Bearer UNUSUAL_WHALES_API_TOKEN. Every method degrades to
  * { available:false } on error — a bad field never crashes the app. UW numbers often arrive as

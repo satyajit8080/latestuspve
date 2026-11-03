@@ -285,7 +285,6 @@ export function computeLearning(records, { horizon = '30m', minSample = 5 } = {}
   })).sort((a, b) => (b.avgReturn || -999) - (a.avgReturn || -999));
 
   const trusted = factors.filter((f) => !f.gated);
-  const shadowPairs = done.filter((r) => isNum(r.shadowScore)).map((r) => ({ shadow: r.shadowScore, ret: ret(r) }));
 
   const charac = (rs) => {
     if (!rs.length) return null;
@@ -308,7 +307,6 @@ export function computeLearning(records, { horizon = '30m', minSample = 5 } = {}
     factorPerformance: factors,
     bestFactor: trusted.length ? trusted[0] : null,
     worstFactor: trusted.length ? trusted[trusted.length - 1] : null,
-    shadowVsActual: shadowPairs.length >= minSample ? { n: shadowPairs.length, avgShadowWinners: avg(shadowPairs.filter((p) => p.ret > 0).map((p) => p.shadow)), avgShadowLosers: avg(shadowPairs.filter((p) => p.ret <= 0).map((p) => p.shadow)) } : { n: shadowPairs.length, gated: true },
     bestCharacteristics: charac(winners), worstCharacteristics: charac(losers),
     note: 'Observation only — these statistics never modify live engine weights. Buckets/factors with n < minSample are gated as unreliable.',
   };
@@ -323,7 +321,7 @@ export function journalRow(r) {
   return {
     id: r.id, ticker: r.ticker, firedAt: r.firedAt, dir: r.composite.dir,
     signal: r.composite.dir === 'bull' ? 'CALL' : 'PUT',
-    score: r.composite.finalScore, shadowScore: isNum(r.shadowScore) ? r.shadowScore : null,
+    score: r.composite.finalScore, v2Score: r.v2 && isNum(r.v2.score) ? r.v2.score : null,
     entryStock: r.entry ? r.entry.stockPrice : null, entryOption: r.entry ? r.entry.optionPrice : null,
     r30m: resolved30, r1h: resolved1h,
     status: (resolved1h != null) ? (resolved1h > 0 ? 'WIN' : 'LOSS') : (resolved30 != null ? 'PARTIAL' : 'PENDING'),

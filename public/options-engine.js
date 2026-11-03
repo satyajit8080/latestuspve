@@ -3,16 +3,14 @@
  * options-engine.js — PRIMARY signal engine over REAL US options + stock data.
  *
  * Deterministic and pure. Consumes a normalized options chain from an OptionsDataProvider
- * (see providers/options.js). PVE prediction-market data is SECONDARY confirmation only and is
- * applied in combineScores() — it can raise or lower confidence but NEVER reverses direction.
+ * (see providers/options.js). Unusual Whales is the only data source.
  *
  * HARD RULE: nothing here fabricates OI, Greeks, IV, GEX, PCR, option volume, sweeps, blocks,
  * NBBO, or chain data. Every feature carries an `available` flag; missing inputs => unavailable,
  * which lowers coverage/data-quality rather than inventing a value. Derived analytics (GEX,
  * gamma flip, max pain, volume/OI anomaly) are computed ONLY from real chain fields that are present.
  *
- * IV-rank and OI-change require history Polygon does not return in one call; they are computed from
- * OUR captured snapshots and are `available:false` until enough snapshots exist.
+ * OI change comes from UW's daily /oi-change (ctx.oiChange) and is `available:false` without it.
  */
 
 export const OPTIONS_ENGINE_VERSION = 'opt-1.1.1';   // 1.1.1: oiChange takes UW daily /oi-change directly (ctx.oiChange); no prev-poll reconstruction
@@ -196,7 +194,7 @@ export function extractOptionsFeatures(chain, ctx = {}) {
 // ---- scoring ----
 /** documented default weights (configurable via cfg.optionsWeights) */
 export const DEFAULT_OPTIONS_WEIGHTS = Object.fromEntries(Object.entries(OPTIONS_FEATURE_DEFS).map(([k, d]) => [k, d.weight]));
-export const DEFAULT_COMBINE = { wOptions: 0.6, wStock: 0.25, wPredMkt: 0.15, pveAgreeBoost: 0.12, pveDisagreePenalty: 0.15, pveFactorFloor: 0.8, pveFactorCap: 1.15, epsilon: 0.03 };
+export const DEFAULT_COMBINE = { wOptions: 0.6, wStock: 0.25, epsilon: 0.03 };
 
 /** @param {*[]} features @param {*} [cfg] @returns {{optionsScore:number, dir:string, net:number, coverage:number, comps:*[]}} */
 export function scoreOptions(features, cfg = {}) {
@@ -237,34 +235,25 @@ export function dataQualityScore(chain) {
 }
 
 /**
- * Combine PRIMARY (options+stock) with SECONDARY (PVE). PVE adjusts confidence, never reverses direction.
- * @param {*} parts { optionsScore, optionsDir, stockScore, stockDir, predictionMarketScore, predictionMarketDir, dataQuality }
+ * Combine options score with stock confirmation and data quality.
+ * @param {*} parts { optionsScore, optionsDir, stockScore, stockDir, dataQuality }
  * @param {*} [cfg]
  */
 export function combineScores(parts, cfg = {}) {
   const c = { ...DEFAULT_COMBINE, ...cfg };
-  const { optionsScore = 0, optionsDir = 'neutral', stockScore = 0, stockDir = 'neutral', predictionMarketScore = null, predictionMarketDir = null, dataQuality = 0 } = parts;
-  // PRIMARY blend (options-weighted), direction from options (fallback stock)
+  const { optionsScore = 0, optionsDir = 'neutral', stockScore = 0, stockDir = 'neutral', dataQuality = 0 } = parts;
   const wp = c.wOptions + c.wStock || 1;
   // Stock momentum is a SIGNED confirmation: agrees with options → boost, disagrees → penalty.
-  // (Previously stockScore added its magnitude regardless of sign, so a falling stock inflated a CALL.)
   const stockConfirm = (stockDir === 'neutral' || optionsDir === 'neutral') ? 0 : (stockDir === optionsDir ? 1 : -1);
   const primary = clamp((c.wOptions * optionsScore + c.wStock * stockScore * stockConfirm) / wp, 0, 100);
   const dir = optionsDir !== 'neutral' ? optionsDir : stockDir;
-  // PVE confirmation factor (secondary): agree → boost, disagree → penalty, never flips direction
-  let pveState = 'unavailable', factor = 1;
-  if (isNum(predictionMarketScore) && predictionMarketDir && predictionMarketDir !== 'neutral' && dir !== 'neutral') {
-    if (predictionMarketDir === dir) { pveState = 'agree'; factor = 1 + c.pveAgreeBoost * (predictionMarketScore / 100); }
-    else { pveState = 'disagree'; factor = 1 - c.pveDisagreePenalty * (predictionMarketScore / 100); }
-  } else if (isNum(predictionMarketScore)) { pveState = 'neutral'; }
-  factor = clamp(factor, c.pveFactorFloor, c.pveFactorCap);
   const dqFactor = clamp(dataQuality / 100, 0, 1);
-  const finalScore = Math.round(clamp(primary * factor * dqFactor, 0, 100));
-  return { finalScore, tier: scoreTier(finalScore), dir, primary: Math.round(primary), stockConfirm, pveState, pveFactor: +factor.toFixed(3), dqFactor: +dqFactor.toFixed(2), weights: { wOptions: c.wOptions, wStock: c.wStock, wPredMkt: c.wPredMkt } };
+  const finalScore = Math.round(clamp(primary * dqFactor, 0, 100));
+  return { finalScore, tier: scoreTier(finalScore), dir, primary: Math.round(primary), stockConfirm, dqFactor: +dqFactor.toFixed(2), weights: { wOptions: c.wOptions, wStock: c.wStock } };
 }
 
 /**
- * Build a full options-primary signal. predictionMarket is the SECONDARY sub-score (from PVE engine).
+ * Build a full options-primary signal.
  * Returns null-ish signal with insufficient flag if options data is unavailable (caller must not emit a normal signal).
  */
 export function buildOptionsSignal(chain, ctx = {}, cfg = {}) {
@@ -272,18 +261,17 @@ export function buildOptionsSignal(chain, ctx = {}, cfg = {}) {
   const { features, agg } = extractOptionsFeatures(chain, ctx);
   const opt = scoreOptions(features, cfg);
   const stk = scoreStock(chain, ctx);
-  const pm = ctx.predictionMarket || null; // { score, dir } from PVE engine, or null
   const combined = combineScores({
     optionsScore: opt.optionsScore, optionsDir: opt.dir, stockScore: stk.stockScore, stockDir: stk.dir,
-    predictionMarketScore: pm ? pm.score : null, predictionMarketDir: pm ? pm.dir : null, dataQuality: dq.score,
+    dataQuality: dq.score,
   }, cfg);
   const insufficient = !dq.fieldsAvailable.chain; // no real chain → not a real options signal
   return {
     ticker: chain && chain.ticker, asOf: chain && chain.asOf, insufficient,
     finalScore: combined.finalScore, tier: combined.tier, dir: combined.dir,
-    optionsScore: opt.optionsScore, stockScore: stk.stockScore, predictionMarketScore: pm ? pm.score : null,
+    optionsScore: opt.optionsScore, stockScore: stk.stockScore, stockConfirm: combined.stockConfirm,
     dataQuality: dq.score, dataQualityStatus: dq.status, dataAvailability: dq.fieldsAvailable,
-    pveState: combined.pveState, pveFactor: combined.pveFactor, primary: combined.primary,
+    primary: combined.primary,
     features: opt.comps, agg, stock: stk, weights: combined.weights,
     optionsEngineVersion: OPTIONS_ENGINE_VERSION,
   };
@@ -291,6 +279,6 @@ export function buildOptionsSignal(chain, ctx = {}, cfg = {}) {
 
 // ---- replay (deterministic; reproduces from persisted snapshot, no live API) ----
 export function captureOptionsSnapshot(chain, ctx, cfg, now) {
-  return { optionsEngineVersion: OPTIONS_ENGINE_VERSION, now, ticker: chain && chain.ticker, chain, ctx: { prevAgg: ctx && ctx.prevAgg, oiChange: ctx && ctx.oiChange, flow: ctx && ctx.flow, underlyingHist: ctx && ctx.underlyingHist, predictionMarket: ctx && ctx.predictionMarket }, cfg: cfg || null };
+  return { optionsEngineVersion: OPTIONS_ENGINE_VERSION, now, ticker: chain && chain.ticker, chain, ctx: { prevAgg: ctx && ctx.prevAgg, oiChange: ctx && ctx.oiChange, flow: ctx && ctx.flow, underlyingHist: ctx && ctx.underlyingHist }, cfg: cfg || null };
 }
 export function replayOptionsSignal(snap) { return buildOptionsSignal(snap.chain, snap.ctx || {}, snap.cfg || {}); }

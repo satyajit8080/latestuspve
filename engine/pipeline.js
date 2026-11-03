@@ -16,6 +16,7 @@ import { BaselineStore } from '../store/normalize.js';
 import { rvolReadiness, ivSkewReadiness, sectorRelativeStrength } from '../store/readiness.js';
 import { logSignal } from '../store/signal-log.js';
 import { etDate } from '../lib/time.js';
+import { applyPromotion, DEFAULT_PROMOTION } from '../validated/promotion.js';
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const r2 = (x) => (isNum(x) ? Math.round(x * 100) / 100 : null);
@@ -43,9 +44,9 @@ export function makeDailyCache({ dir = null } = {}) {
 }
 
 // All mutable research state lives here, per process. Keyed by ticker so concurrent tickers never collide.
-export function createPipelineContext(provider, { baselines = new BaselineStore(), dailyDir = null } = {}) {
+export function createPipelineContext(provider, { baselines = new BaselineStore(), dailyDir = null, promotion = DEFAULT_PROMOTION } = {}) {
   return {
-    provider, baselines,
+    provider, baselines, promotion,
     daily: makeDailyCache({ dir: dailyDir }),
     v2State: new Map(), v2PrevFlow: new Map(),
     ivSkew: new IvSkewTracker(), earnings: new EarningsCalendar(provider), marketCtx: new MarketContext(provider),
@@ -201,9 +202,11 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
     try {
       await logSignal({ ticker, sig, scoredAgg, underlying: chain.underlying || null, prevHadSnapshot: !!oc, now, entryOption, vsVwapPct, changePct, atr, vwap,
         v2: v2 && v2.available ? { version: V2_VERSION, score: v2.score, dir: v2.dir, coverage: v2.coverage, components: v2.components, reasons: v2.reasons, quality: v2.quality, gated: v2.gated } : null,
-        flowDetailed: chain.flow || null });
+ });
     } catch { /* journaling must never break a build */ }
   }
+  // The ONLY place v2 can replace the published score: validated/promotion.json (human-edited, default 'opt').
+  applyPromotion(sig, v2, ctx.promotion);
   const out = { ok: true, signal: sig, chain, v2, v2state, readiness, extras: { vwap, vsVwapPct, changePct, atr, entryOption, oiChange, ohlc, ivRank } };
   ctx.lastSignals.set(ticker, { signal: sig, chain, at: Date.now() });
   return out;

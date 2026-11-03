@@ -9,15 +9,15 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const importsOf = (src) => [...src.matchAll(/import\s+[^'"]*from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
 
 test('J: production files do NOT import from research/ (offline ML/validation stays offline)', () => {
-  for (const f of ['server.js', 'validated/model.js', 'store/signal-log.js', 'store/journal.js', 'store/journal-store.js', 'shadow/engine.js', 'shadow/cross-sectional.js', 'public/options-engine.js', 'providers/unusualwhales.js', 'providers/options.js', 'ai/agents.js', 'classify.js', 'ticker.js']) {
+  for (const f of ['server.js', 'validated/promotion.js', 'store/signal-log.js', 'store/journal.js', 'store/journal-store.js', 'engine/pipeline.js', 'public/options-engine.js', 'providers/unusualwhales.js', 'providers/options.js', 'ai/agents.js', 'ticker.js']) {
     const imps = importsOf(read(f));
     for (const i of imps) assert.ok(!/(^|\/)research\//.test(i) && !i.includes('/research/'), `${f} must not import research code (found ${i})`);
   }
 });
 
-test('J: validated model imports nothing from research/ or ai/ or ML libs', () => {
-  const imps = importsOf(read('validated/model.js'));
-  assert.equal(imps.length, 0, `validated/model.js should be dependency-free pure JS (found: ${imps.join(', ')})`);
+test('J: promotion switch imports only node:fs (pure, dependency-free)', () => {
+  const imps = importsOf(read('validated/promotion.js'));
+  assert.deepEqual(imps, ['node:fs']);
 });
 
 test('J: server transitively reaches only production modules (no research/* in its import graph)', () => {

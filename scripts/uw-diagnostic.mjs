@@ -4,10 +4,10 @@
 // Hits each endpoint the provider uses and prints HTTP status + the TOP-LEVEL JSON KEYS of the
 // response (and keys of the first array element), so we can lock exact field mappings. It never
 // prints the token and truncates values — safe to copy/paste the output back.
-const token = process.env.UNUSUAL_WHALES_API_TOKEN || process.env.OPTIONS_API_KEY;
+const token = process.env.UNUSUAL_WHALES_API_TOKEN;
 const base = (process.env.OPTIONS_BASE_URL || 'https://api.unusualwhales.com').replace(/\/$/, '');
 const ticker = (process.argv[2] || 'AAPL').toUpperCase();
-if (!token) { console.error('Set UNUSUAL_WHALES_API_TOKEN (or OPTIONS_API_KEY) first.'); process.exit(1); }
+if (!token) { console.error('Set UNUSUAL_WHALES_API_TOKEN first.'); process.exit(1); }
 
 const endpoints = [
   ['getUnderlying', `/api/stock/${ticker}/stock-state`],
