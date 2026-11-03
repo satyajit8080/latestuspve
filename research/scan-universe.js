@@ -40,7 +40,7 @@ function relativeVolume(ohlc, todayVol) {
 export async function computeRow(P, ticker, opt) {
   const { sectorMap = {}, ctx } = opt;
   // The SAME pipeline the server uses (engine/pipeline.js): identical production + v2 output for the same UW payload.
-  const r = await computeTickerSignal(P, ticker, ctx, { gap: opt.gap, now: opt.now });
+  const r = await computeTickerSignal(P, ticker, ctx, { gap: opt.gap, now: opt.now, lite: true });
   if (!r.ok) { const e = new Error(r.detail || r.error || r.reason || 'no chain'); if (r.rateLimited) e.rateLimited = true; throw e; }
   const { signal: sig, chain, v2, extras } = r;
   const price = g(chain, 'underlying', 'price');
@@ -66,7 +66,7 @@ export async function computeRow(P, ticker, opt) {
 export async function main() {
   const key = process.env.UNUSUAL_WHALES_API_TOKEN;
   const dir = process.env.SCAN_DIR || path.join(ROOT, 'research-data', 'scan');
-  const limit = Math.max(1, Math.min(500, Number(process.env.SCAN_LIMIT || 200)));   // universe size per run (UW screener cap 500)
+  const limit = Math.max(1, Math.min(600, Number(process.env.SCAN_LIMIT || 600)));   // universe size per run: top 600 by the UW screener
   const gap = Number(process.env.SCAN_GAP_MS || 100);
   if (!key) { console.error('UNUSUAL_WHALES_API_TOKEN required.'); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
@@ -91,7 +91,7 @@ export async function main() {
 
   let rows = []; let ok = 0, skipped = 0, rateLimited = 0, stop = false, next = 0, done = 0;
   const started = Date.now();
-  const concurrency = Math.max(1, Math.min(8, Number(process.env.SCAN_CONCURRENCY || 4)));
+  const concurrency = Math.max(1, Math.min(10, Number(process.env.SCAN_CONCURRENCY || 6)));
   const outPath = path.join(dir, 'latest.json');
   // Results are written PROGRESSIVELY so the dashboard shows tickers as they finish instead of staying blank until the end.
   const writeSnapshot = (partial) => {

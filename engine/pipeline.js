@@ -93,7 +93,7 @@ export function computeTickerSignal(provider, ticker, ctx, opts = {}) {
   return p;
 }
 
-async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0 }) {
+async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0, lite = false }) {
   if (!P || P.name === 'null') return { ok: false, error: (P && P.reason) || 'No options provider configured', signal: null, chain: null };
   const dwell = () => (gap ? sleep(gap) : null);
   const nowIso = now.toISOString();
@@ -111,7 +111,8 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   const ohlc = P.getOhlc ? await d('ohlc', () => P.getOhlc(ticker)) : null;
   const oiChange = P.getOiChange ? await d('oichange', () => P.getOiChange(ticker)) : null;
   const gex = P.getGex ? await d('gex', () => P.getGex(ticker)) : null;
-  const byStrike = P.getByStrikeGex ? await d('bystrike', () => P.getByStrikeGex(ticker)) : null;
+  // lite (bulk scans): skip display-only context calls (by-strike GEX walls, max pain) to cut ~2 UW calls per ticker
+  const byStrike = P.getByStrikeGex && !lite ? await d('bystrike', () => P.getByStrikeGex(ticker)) : null;
   const ivRank = P.getIvRank ? await d('ivrank', () => P.getIvRank(ticker)) : null;
 
   const vwap = intraday && intraday.available && isNum(intraday.vwap) ? intraday.vwap : null;
@@ -168,7 +169,7 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   else if (gex && gex.available) { if (isNum(gex.gamma_flip)) sig.agg.gammaFlip = gex.gamma_flip; sig.walls = { call: gex.call_wall ?? null, put: gex.put_wall ?? null }; }
   if (ivRank && ivRank.available) { sig.ivRank = ivRank.iv_rank; sig.ivPercentile = ivRank.iv_percentile; }
   // max pain: DISPLAY ONLY (not in the scoring path). UW /max-pain cached per ET day; chain-derived fallback.
-  { const mp = P.getMaxPain ? await d('maxpain', () => P.getMaxPain(ticker)) : null; sig.agg.maxPain = mp && mp.available && isNum(mp.maxPain) ? mp.maxPain : computeMaxPain(chain); }
+  { const mp = P.getMaxPain && !lite ? await d('maxpain', () => P.getMaxPain(ticker)) : null; sig.agg.maxPain = mp && mp.available && isNum(mp.maxPain) ? mp.maxPain : computeMaxPain(chain); }
 
   // Entry option price: ATM contract on the signal's side, captured now (never back-filled).
   let entryOption = null;

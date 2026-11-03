@@ -88,8 +88,8 @@ export function renderTicker(root, { ticker, cal, openInput }) {
   function paintHead() {
     const sc = state.scan.running; const lim = state.readiness && state.readiness.uw;
     const sat = lim && isNum(lim.perMinuteLimit) && lim.perMinuteUsed >= lim.perMinuteLimit * 0.95;
-    refreshBtn.disabled = !!sc || !!sat || (state.authInfo && state.authInfo.options && state.authInfo.options.configured === false);
-    refreshBtn.title = sc ? 'Disabled while a scan is running' : sat ? 'Disabled: the rate limit is nearly saturated' : 'Recompute from Unusual Whales now. Costs roughly 8–12 requests of quota. Writes nothing to the journal.';
+    refreshBtn.disabled = !!sat || (state.authInfo && state.authInfo.options && state.authInfo.options.configured === false);
+    refreshBtn.title = sat ? 'Disabled: the rate limit is nearly saturated' : 'Recompute from Unusual Whales now. Costs roughly 8–12 requests of quota. Writes nothing to the journal.';
     mount(head, h('a', { href: '#/scan', class: 'btn ghost' }, '← Scan'), h('h1', {}, ticker), h('span', { class: 'grow' }), payload ? h('span', { class: 'muted' }, `${payload.source === 'live' ? 'Live read' : 'Cached'} · `) : null, payload ? freshBadge(payload.at, state.session.state) : null, refreshBtn);
   }
   async function refreshLive(auto) {
@@ -103,7 +103,7 @@ export function renderTicker(root, { ticker, cal, openInput }) {
   function paint() {
     paintHead();
     const row = scanRow(), sig = payload && payload.signal, ch = payload && payload.chain;
-    if (!payload && !row) return mount(body, emptyState(`Loading ${ticker}…`, state.scan.running ? 'A scan is running, so a live lookup is paused. It will load automatically when the scan finishes.' : 'This ticker is not in the last scan. Fetching it live from Unusual Whales (nothing is written to the journal).'));
+    if (!payload && !row) return mount(body, emptyState(`Loading ${ticker}…`, 'Fetching it live from Unusual Whales (nothing is written to the journal).'));
     const v = row || (sig ? adaptScanRow({ ticker, productionScore: sig.finalScore, dir: sig.dir, tier: sig.tier, gated: sig.gated, rawScore: sig.rawScore, gateReasons: sig.gateReasons, coverage: sig.coverage, dataQuality: sig.dataQuality }) : null);
     const sc = sig ? { score: sig.finalScore, dir: sig.dir, gated: sig.gated, rawScore: sig.rawScore, tier: sig.tier, gates: sig.gateReasons || [], coverage: sig.coverage } : v;
     const spot = ch && ch.underlying && ch.underlying.price != null ? ch.underlying.price : (v && v.price);
@@ -125,12 +125,11 @@ export function renderTicker(root, { ticker, cal, openInput }) {
   // While a scan runs (or the limiter is saturated) it waits and loads when that clears.
   let autoTried = false;
   const maybeAuto = async () => {
-    if (!alive || autoTried || payload || scanRow()) return;
+    if (!alive || autoTried || payload) return;          // no cached detail (even if the ticker is in the scan): load it live, read-only
     if (state.authInfo && state.authInfo.options && state.authInfo.options.configured === false) { mount(body, emptyState('No data provider configured', 'Set OPTIONS_PROVIDER=uw and UNUSUAL_WHALES_API_TOKEN in .env, then restart.')); autoTried = true; return; }
-    if (state.scan.running) return;                       // retried when the scan finishes
     autoTried = true; await refreshLive(true);
   };
-  unsub = subscribe((w) => { if (w === 'scan' || w === 'signals') { if (!payload && !scanRow()) { paint(); maybeAuto(); } } });
+  unsub = subscribe((w) => { if (w === 'scan' || w === 'signals') { if (!payload) { maybeAuto(); } } });
   (async () => { try { const r = await api(`/api/ticker/${encodeURIComponent(ticker)}`); if (!alive) return; if (r.data && r.data.ok) payload = r.data; paint(); maybeAuto(); } catch { if (alive) mount(body, errorState('Cannot reach the server.', () => location.reload())); } })();
   return { destroy() { alive = false; unsub(); }, focusSearch() { navigate('#/t'); }, repaint: paintHead };
 }
