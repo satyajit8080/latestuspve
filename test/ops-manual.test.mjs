@@ -39,6 +39,7 @@ const { httpServer } = await import('../server.js');
 const B = 'http://127.0.0.1:4287';
 const cookie = (await real(B + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) })).headers.get('set-cookie').split(';')[0];
 const G = async (p) => (await real(B + p, { headers: { cookie } })).json();
+const idle = async () => { for (let i = 0; i < 100; i++) { if (!(await G('/api/scan/status')).running) return; await new Promise((r) => setTimeout(r, 100)); } };   // single-ticker calls are refused while a scan runs
 const POST = async (p, body) => { const r = await real(B + p, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); return { status: r.status, body: await r.json() }; };
 
 // ---------------------------------------------------------------- §1 manual triggers
@@ -79,6 +80,7 @@ test('UW network failure degrades gracefully and never throws to the client', as
 });
 
 test('UW 429 is retried/backed off and surfaced, not converted to zero data', async () => {
+  await idle();
   uwFailMode = 'ratelimit';
   const before = uwCalls;
   const r = await G('/api/options/AAPL');
@@ -89,6 +91,7 @@ test('UW 429 is retried/backed off and surfaced, not converted to zero data', as
 });
 
 test('UW 5xx does not corrupt the journal', async () => {
+  await idle();
   uwFailMode = 'server';
   await G('/api/options/AAPL').catch(() => null);
   uwFailMode = null;

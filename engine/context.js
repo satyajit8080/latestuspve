@@ -84,11 +84,14 @@ export class IvSkewTracker {
   }
 
   // Returns CHANGES vs the previous snapshot for this ticker, then stores the new one.
-  update(ticker, contracts, spot) {
+  update(ticker, contracts, spot) { return this._diff(ticker, contracts, spot, true); }
+  // Same result as update() but stores nothing (read-only callers: AI, display).
+  peek(ticker, contracts, spot) { return this._diff(ticker, contracts, spot, false); }
+  _diff(ticker, contracts, spot, store) {
     const snap = this.snapshot(contracts, spot);
     if (!snap) return { available: false, reason: 'insufficient_iv_data' };
     const prev = this.prev.get(ticker);
-    this.prev.set(ticker, snap);
+    if (store) this.prev.set(ticker, snap);
     if (!prev || Date.now() - prev.at > this.maxAgeMs || prev.expiry !== snap.expiry) return { available: false, reason: 'no_prior_snapshot' };
     const d = (a, b) => (isNum(a) && isNum(b) ? a - b : null);
     return {

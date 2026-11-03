@@ -15,7 +15,7 @@
  * OUR captured snapshots and are `available:false` until enough snapshots exist.
  */
 
-export const OPTIONS_ENGINE_VERSION = 'opt-1.1.0';
+export const OPTIONS_ENGINE_VERSION = 'opt-1.1.1';   // 1.1.1: oiChange takes UW daily /oi-change directly (ctx.oiChange); no prev-poll reconstruction
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -141,12 +141,19 @@ export function extractOptionsFeatures(chain, ctx = {}) {
     const ok = isNum(agg.volOIRatio); const s = ok ? clamp((agg.volOIRatio - 0.3) / 0.7, 0, 1) : 0;
     features.push(feat('volOIAnomaly', ok, 0, s, agg.volOIRatio, ok ? `vol/OI ${agg.volOIRatio.toFixed(2)}` : 'no OI'));
   }
-  // 3) OI change (directional; needs prev snapshot)
+  // 3) OI change (directional). Preferred input: UW daily /oi-change (ctx.oiChange = {callOIChange, putOIChange}),
+  //    a real daily change that is identical on every poll that day. prev total OI = current total - net change.
+  //    Legacy ctx.prevAgg (diff against an earlier chain snapshot) is still accepted for replays of old snapshots.
   {
-    const ok = !!prev && isNum(prev.callOI) && isNum(prev.putOI) && isNum(agg.callOI) && isNum(agg.putOI);
-    let s = 0, val = null;
-    if (ok) { const dCall = agg.callOI - prev.callOI, dPut = agg.putOI - prev.putOI; const net = dCall - dPut; const base = Math.max(1, prev.callOI + prev.putOI); val = net / base; s = clamp(net / base / 0.2, -1, 1); }
-    features.push(feat('oiChange', ok, ok ? Math.sign(s) : 0, Math.abs(s), val, ok ? `ΔOI net ${(val * 100).toFixed(1)}%` : 'no prior snapshot'));
+    let ok = false, s = 0, val = null;
+    const oc = ctx.oiChange;
+    if (oc && isNum(oc.callOIChange) && isNum(oc.putOIChange) && isNum(agg.callOI) && isNum(agg.putOI)) {
+      const prevTotal = agg.callOI + agg.putOI - oc.callOIChange - oc.putOIChange;
+      if (prevTotal > 0) { ok = true; const net = oc.callOIChange - oc.putOIChange; val = net / prevTotal; s = clamp(val / 0.2, -1, 1); }
+    } else if (prev && isNum(prev.callOI) && isNum(prev.putOI) && isNum(agg.callOI) && isNum(agg.putOI)) {
+      ok = true; const net = (agg.callOI - prev.callOI) - (agg.putOI - prev.putOI); const base = Math.max(1, prev.callOI + prev.putOI); val = net / base; s = clamp(val / 0.2, -1, 1);
+    }
+    features.push(feat('oiChange', ok, ok ? Math.sign(s) : 0, Math.abs(s), val, ok ? `ΔOI net ${(val * 100).toFixed(1)}%` : 'no OI change data'));
   }
   // 4) IV behavior (confirmation): change if prev, else level context vs 0.5
   {
@@ -284,6 +291,6 @@ export function buildOptionsSignal(chain, ctx = {}, cfg = {}) {
 
 // ---- replay (deterministic; reproduces from persisted snapshot, no live API) ----
 export function captureOptionsSnapshot(chain, ctx, cfg, now) {
-  return { optionsEngineVersion: OPTIONS_ENGINE_VERSION, now, ticker: chain && chain.ticker, chain, ctx: { prevAgg: ctx && ctx.prevAgg, flow: ctx && ctx.flow, underlyingHist: ctx && ctx.underlyingHist, predictionMarket: ctx && ctx.predictionMarket }, cfg: cfg || null };
+  return { optionsEngineVersion: OPTIONS_ENGINE_VERSION, now, ticker: chain && chain.ticker, chain, ctx: { prevAgg: ctx && ctx.prevAgg, oiChange: ctx && ctx.oiChange, flow: ctx && ctx.flow, underlyingHist: ctx && ctx.underlyingHist, predictionMarket: ctx && ctx.predictionMarket }, cfg: cfg || null };
 }
 export function replayOptionsSignal(snap) { return buildOptionsSignal(snap.chain, snap.ctx || {}, snap.cfg || {}); }

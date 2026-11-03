@@ -33,10 +33,8 @@ import { logSignal } from './store/signal-log.js';
 import { readJournal, readSignal, pendingOutcomes } from './store/journal-store.js';
 import { filterJournal, computeLearning } from './store/journal.js';
 import { baselineReport } from './store/evaluation.js';
-import { scoreV2, V2_VERSION } from './engine/v2.js';
-import { step as stateStep, isActionable } from './engine/state.js';
+import { createPipelineContext, computeTickerSignal } from './engine/pipeline.js';
 import { BaselineStore } from './store/normalize.js';
-import { computeRvol, MarketContext, IvSkewTracker, EarningsCalendar, eventFlags } from './engine/context.js';
 import { rvolReadiness, ivSkewReadiness, sectorRelativeStrength, macroReadiness, researchReadiness, promotionGate, RateLimiter } from './store/readiness.js';
 import { buildOptionsSignal, OPTIONS_ENGINE_VERSION } from './public/options-engine.js';
 
@@ -382,7 +380,6 @@ app.get('/api/explore/markets', requireAuth, async (req, res) => {
 // ---- REAL options + stock (PRIMARY). Provider selected via env; key stays server-side. ----
 const UW_LIMITER = new RateLimiter({ maxPerMinute: Number(process.env.UW_MAX_PER_MINUTE) || null, maxPerScan: Number(process.env.UW_MAX_PER_SCAN) || 12000 });   // 500 tickers x ~14 calls + headroom
 const OPT_PROVIDER = makeOptionsProvider(process.env, { limiter: UW_LIMITER });
-const optCache = new Map(); // ticker -> { agg, prices:[] } for OI/IV-change + stock momentum (prior snapshots only)
 const AI = { cfg: aiConfigFromEnv(process.env), client: new OpenRouterClient(aiConfigFromEnv(process.env)) };
 // Phase 4 promotion config: which shadow features are approved for the validated score (evidence-driven).
 // Defaults to identity (validated == current) until research/run-phase3.js rewrites it from real data.
@@ -399,150 +396,29 @@ async function persistAiRun(ticker, rec) {
 
 function isNumS(x) { return typeof x === 'number' && Number.isFinite(x); }
 
-// Shared: build the deterministic options signal for a ticker (used by /api/options and /api/ai).
-async function buildTickerSignal(ticker) {
-  if (OPT_PROVIDER.name === 'null') return { ok: false, error: OPT_PROVIDER.reason || 'No options provider configured', signal: null, chain: null };
-  const c = await OPT_PROVIDER.getChain(ticker, { limit: 250 });
-  const chain = c.chain;
-  // §14 — bad/absent UW data must never become a real-looking score of 0. If the chain is
-  // empty (outage, rate limit, unknown ticker) report UNAVAILABLE instead of scoring nothing.
-  if (!chain || !Array.isArray(chain.contracts) || chain.contracts.length === 0) {
-    return { ok: false, status: 'UNAVAILABLE', reason: c && c.error ? 'UW_REQUEST_FAILED' : 'UW_NO_CONTRACTS',
-      detail: c && c.error ? String(c.error).slice(0, 200) : 'UW returned no option contracts for this ticker',
-      signal: null, chain: null };
-  }
-  try { const u = await OPT_PROVIDER.getUnderlying(ticker); if (u && u.underlying && u.underlying.available) { chain.underlying = { ...chain.underlying, ...u.underlying, available: true }; chain.fieldsAvailable.underlying = true; } } catch (e) { /* underlying optional */ }
-  let ohlcHist = [], ohlcBars = [];
-  try { if (OPT_PROVIDER.getOhlc) { const oh = await OPT_PROVIDER.getOhlc(ticker); if (oh && oh.available && Array.isArray(oh.bars)) { ohlcBars = oh.bars; ohlcHist = oh.bars.slice(-6).map((b) => b.close).filter(isNumS); } } } catch (e) { /* ohlc optional */ }
-  let vwap = null, _intraday = null; try { if (OPT_PROVIDER.getIntraday) { const iv = await OPT_PROVIDER.getIntraday(ticker); if (iv && iv.available) { _intraday = iv; if (isNumS(iv.vwap)) vwap = iv.vwap; } } } catch (e) { /* intraday optional */ }
-  const prev = optCache.get(ticker) || {};
-  const pc = chain.underlying && chain.underlying.prevClose;
-  const ref = isNumS(vwap) ? vwap : pc; // INTRADAY: price vs VWAP; fall back to prev close when market closed
-  const hist = (isNumS(ref) && ref > 0) ? [ref, ref] : (ohlcHist.length >= 2 ? ohlcHist.slice(-2) : (Array.isArray(prev.prices) ? prev.prices : []));
-  let prevAgg = prev.agg || null;
-  if (!prevAgg && OPT_PROVIDER.getOiChange) { // cold start: derive prior OI snapshot from UW's real OI change
-    try {
-      const oc = await OPT_PROVIDER.getOiChange(ticker);
-      if (oc && oc.available && isNumS(oc.callOIChange) && isNumS(oc.putOIChange)) {
-        const probe = buildOptionsSignal(chain, { prevAgg: null, underlyingHist: hist, flow: chain.flow }, {});
-        const cOI = probe && probe.agg && probe.agg.callOI, pOI = probe && probe.agg && probe.agg.putOI;
-        if (isNumS(cOI) && isNumS(pOI)) prevAgg = { callOI: Math.max(0, cOI - oc.callOIChange), putOI: Math.max(0, pOI - oc.putOIChange) };
-      }
-    } catch (e) { /* oi-change optional */ }
-  }
-  const sig = buildOptionsSignal(chain, { prevAgg, underlyingHist: hist, flow: chain.flow }, {});
-  if (isNumS(vwap)) sig.vwap = vwap;
-  // SIGNAL JOURNAL (req 7): snapshot the aggregates the SCORE actually used, BEFORE the PVE display
-  // overrides below mutate sig.agg. This is bucket (A). The overrides become bucket (B).
-  const scoredAgg = { gex: sig.agg.gex, gammaFlip: sig.agg.gammaFlip, maxPain: sig.agg.maxPain, cpVolRatio: sig.agg.cpVolRatio, cpOIRatio: sig.agg.cpOIRatio, volOIRatio: sig.agg.volOIRatio, atmIV: sig.agg.atmIV, strikeConcentration: sig.agg.strikeConcentration, avgSpread: sig.agg.avgSpread, spot: sig.agg.spot };
-  if (OPT_PROVIDER.name !== 'null' && OPT_PROVIDER.getGex) {
-    try { const g = await OPT_PROVIDER.getGex(ticker); if (g && g.available) { if (isNumS(g.net_gex)) sig.agg.gex = g.net_gex; if (isNumS(g.gamma_flip)) sig.agg.gammaFlip = g.gamma_flip; sig.walls = { call: g.call_wall, put: g.put_wall }; sig.gexSource = 'pve'; } } catch (e) { /* gex optional */ }
-    try { const iv = await OPT_PROVIDER.getIvRank(ticker); if (iv && iv.available) { sig.ivRank = iv.iv_rank; sig.ivPercentile = iv.iv_percentile; } } catch (e) { /* iv rank optional */ }
-  }
-  if (isNumS(chain.underlying && chain.underlying.price)) optCache.set(ticker, { agg: sig.agg, prices: [...hist, chain.underlying.price].slice(-30) });
-  // fire-and-forget — never awaited, wrapped internally; a logging failure cannot affect this response (req 10)
-  // Entry option price = ATM contract on the signal's side, captured at signal time (never back-filled).
-  let entryOption = null;
-  try {
-    const spot = chain.underlying && chain.underlying.price;
-    const want = sig.dir === 'bull' ? 'call' : 'put';
-    if (isNumS(spot) && Array.isArray(chain.contracts)) {
-      const cands = chain.contracts.filter((c) => c && c.type === want && isNumS(c.strike) && (isNumS(c.bid) || isNumS(c.ask) || isNumS(c.last)));
-      if (cands.length) {
-        const atm = cands.reduce((best, c) => (Math.abs(c.strike - spot) < Math.abs(best.strike - spot) ? c : best), cands[0]);
-        const mid = (isNumS(atm.bid) && isNumS(atm.ask)) ? (atm.bid + atm.ask) / 2 : (isNumS(atm.last) ? atm.last : null);
-        if (isNumS(mid)) entryOption = Math.round(mid * 100) / 100;
-      }
-    }
-  } catch (e) { entryOption = null; }
-  const _vsVwap = (isNumS(vwap) && isNumS(chain.underlying && chain.underlying.price) && vwap > 0) ? Math.round(((chain.underlying.price - vwap) / vwap) * 10000) / 100 : null;
-  const _chg = (chain.underlying && isNumS(chain.underlying.price) && isNumS(chain.underlying.prevClose) && chain.underlying.prevClose > 0) ? Math.round(((chain.underlying.price - chain.underlying.prevClose) / chain.underlying.prevClose) * 10000) / 100 : null;
-  // fire-and-forget — never awaited, wrapped internally; a logging failure cannot affect this response (req 10)
-  // ATR(14) from the daily bars already fetched — real value or null, never a guess.
-  let _atr = null;
-  try {
-    if (Array.isArray(ohlcBars) && ohlcBars.length >= 15) {
-      const b = ohlcBars.slice(-15), trs = [];
-      for (let i = 1; i < b.length; i++) {
-        const h = b[i].high, l = b[i].low, pc = b[i - 1].close;
-        if (isNumS(h) && isNumS(l) && isNumS(pc)) trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-      }
-      if (trs.length >= 10) _atr = Math.round((trs.reduce((x, y) => x + y, 0) / trs.length) * 100) / 100;
-    }
-  } catch (e) { _atr = null; }
-  // ---- v2 SHADOW PATH (spec phases 2-5). Computed alongside, never overrides production. ----
-  let v2 = null, v2state = null;
-  try {
-    const trades = (chain.flow && Array.isArray(chain.flow.largeTrades)) ? chain.flow.largeTrades : [];
-    const nowIso = new Date().toISOString();
-    const rawFlow = trades.length ? (await import('./engine/features.js')).signedFlow(trades, { spot: chain.underlying && chain.underlying.price }) : null;
-    // per-ticker same-time-of-day normalization (strictly backward-looking)
-    let normalized = {};
-    if (rawFlow && rawFlow.available) {
-      normalized = await BASELINES.normalizeAndRecord(ticker, {
-        deltaWeightedSignedFlow: rawFlow.deltaWeightedSignedFlow,
-        openingDeltaFlow: rawFlow.openingDeltaFlow,
-        flowIntensity: rawFlow.flowIntensity,
-      }, nowIso);
-    }
-    // ---- real Phase-4 context inputs (null only when genuinely unavailable) ----
-    const _flags = eventFlags(new Date());
-    let _rvol = { available: false, rvol: null }, _mkt = { spyTrend: null, qqqTrend: null }, _ivc = { available: false }, _earn = null;
-    try { if (_intraday) _rvol = await computeRvol({ baselines: BASELINES, ticker, intraday: _intraday, at: nowIso }); } catch (e) { /* rvol optional */ }
-    try { _mkt = await MARKET_CTX.get(); } catch (e) { /* market optional */ }
-    try { _ivc = IV_SKEW.update(ticker, chain.contracts || [], chain.underlying && chain.underlying.price); } catch (e) { /* iv optional */ }
-    try { _earn = await EARNINGS.daysAway(ticker); } catch (e) { _earn = null; }
-    // §5 sector relative strength from UW sector-tide (no external provider)
-    let _sector = { state: 'UNAVAILABLE' };
-    try {
-      if (Date.now() - SECTOR_TIDE.at > 5 * 60000 && OPT_PROVIDER.getSectorTide) { SECTOR_TIDE.data = await OPT_PROVIDER.getSectorTide(); SECTOR_TIDE.at = Date.now(); }
-      let secName = null;
-      try { const comp = await OPT_PROVIDER.getCompanies([ticker]); secName = comp && comp[ticker] ? comp[ticker].sector : null; } catch (e) { secName = null; }
-      _sector = sectorRelativeStrength({ ticker, sector: secName, sectorTide: SECTOR_TIDE.data, marketTide: null });
-    } catch (e) { _sector = { state: 'UNAVAILABLE', reason: 'SECTOR_LOOKUP_FAILED' }; }
-    READINESS.rvol = rvolReadiness({ baselines: BASELINES, ticker, bucket: _flags.timeBucket, rvolResult: _rvol });
-    READINESS.ivSkew = ivSkewReadiness(_ivc);
-    READINESS.sector = _sector;
+// ONE pipeline (engine/pipeline.js) builds production + v2-shadow signals for BOTH this server and the scan.
+// Per-process research state (baselines, v2 state machine, IV skew, readiness) lives in PIPE, keyed by ticker.
+const BASELINES = new BaselineStore();
+const PIPE = createPipelineContext(OPT_PROVIDER, { baselines: BASELINES });
+const buildTickerSignal = (ticker, opts = {}) => computeTickerSignal(OPT_PROVIDER, ticker, PIPE, opts);
 
-    v2 = scoreV2({
-      ticker, at: nowIso, trades, normalized,
-      prevFlow: V2_PREVFLOW.get(ticker) ?? null,
-      spot: chain.underlying && chain.underlying.price, vwap: isNumS(vwap) ? vwap : null, atr: _atr,
-      gex: sig.agg && isNumS(sig.agg.gex) ? sig.agg.gex : null,
-      gammaFlip: sig.agg && isNumS(sig.agg.gammaFlip) ? sig.agg.gammaFlip : null,
-      callWall: sig.walls ? sig.walls.call : null, putWall: sig.walls ? sig.walls.put : null,
-      previousRegime: (V2_STATE.get(ticker) || {}).gammaRegime || null,
-      rvol: _rvol.available ? _rvol.rvol : null,
-      market: { spyTrend: _mkt.spyTrend, qqqTrend: _mkt.qqqTrend, sectorTrend: _sector.sectorTrend || null, relativeStrength: _sector.sectorRelativeStrength ?? null },
-      ivChanges: _ivc.available ? _ivc : {},
-      events: { timeBucket: _flags.timeBucket, isOpex: _flags.isOpex, earningsDaysAway: _earn },
-      vwapSlope: null, ret5m: null, ret15m: null, ret30m: null,
-    });
-    if (rawFlow && rawFlow.available) V2_PREVFLOW.set(ticker, rawFlow.deltaWeightedSignedFlow);
-    if (v2 && v2.available) {
-      const prevState = V2_STATE.get(ticker) || null;
-      v2state = stateStep(prevState, { score: v2.score, dir: v2.dir, at: nowIso });
-      v2state.gammaRegime = v2.gamma && v2.gamma.available ? v2.gamma.regime : null;
-      V2_STATE.set(ticker, v2state);
-      sig.v2 = { version: V2_VERSION, score: v2.score, dir: v2.dir, state: v2state.state, smoothedScore: v2state.smoothedScore,
-        actionable: isActionable(v2state.state), coverage: v2.coverage, components: v2.components,
-        multipliers: v2.multipliers, reasons: v2.reasons, quality: v2.quality, gated: v2.gated,
-        note: 'shadow only — production score is unchanged' };
-    }
-  } catch (e) { sig.v2 = { error: e.message, note: 'shadow path failed; production unaffected' }; }
-
-  void logSignal({ provider: OPT_PROVIDER, ticker, sig, scoredAgg, underlying: chain.underlying || null, prevHadSnapshot: !!prev.agg, now: new Date(), entryOption, vsVwapPct: _vsVwap, changePct: _chg, atr: _atr, vwap: isNumS(vwap) ? vwap : null, v2: sig.v2 || null });
-  return { ok: true, signal: sig, chain };
+// The scan child process has its OWN UW rate limiter; live single-ticker calls during a scan could push the
+// combined rate past UW's per-minute limit, so they are refused until the scan finishes.
+function scanBusy(res) {
+  if (!SCAN_STATE.running) return false;
+  res.status(409).json({ ok: false, error: 'SCAN_RUNNING', detail: 'A universe scan is using the Unusual Whales budget. Retry when it finishes (see /api/scan/status).', state: SCAN_STATE });
+  return true;
 }
-
 app.get('/api/options/:ticker', requireAuth, async (req, res) => {
   const ticker = safeTicker(req.params.ticker);
   if (!ticker) return res.json({ ok: false, error: 'Invalid ticker', provider: OPT_PROVIDER.name, normalized: null });
+  if (scanBusy(res)) return;
   if (OPT_PROVIDER.name === 'null') {
     return res.json({ ok: false, provider: 'null', error: OPT_PROVIDER.reason || 'Insufficient options data — no options provider configured (set OPTIONS_PROVIDER + OPTIONS_API_KEY)', normalized: null });
   }
   try {
     const built = await buildTickerSignal(ticker);
+    if (!built.ok) return res.json({ ok: false, provider: OPT_PROVIDER.name, status: built.status || null, reason: built.reason || null, error: built.error || built.detail || 'no options data', normalized: null });
     const sig = built.signal; const chain = built.chain;
     const contracts = (chain.contracts || []).slice().sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 60);
     res.json({ ok: true, provider: OPT_PROVIDER.name, ts: new Date().toISOString(), signal: sig, chain: { ticker, underlying: chain.underlying, fieldsAvailable: chain.fieldsAvailable, contracts } });
@@ -559,8 +435,12 @@ app.post('/api/ai/analyze/:ticker', requireAuth, async (req, res) => {
   // cache
   const hit = aiCache.get(ticker);
   if (hit && (Date.now() - hit.ts) < AI.cfg.cacheTtlMs) return res.json({ ok: true, cached: true, ...hit.payload });
+  // AI is explain-only and must have NO research side effects: reuse the last computed signal when fresh,
+  // otherwise build with sideEffects:false (no journal row, no baseline write, no state/IV-skew advance).
   let built;
-  try { built = await buildTickerSignal(ticker); } catch (e) { return res.json({ ok: false, error: 'options data error: ' + e.message }); }
+  const last = PIPE.lastSignals.get(ticker);
+  if (last && Date.now() - last.at < 10 * 60000) built = { ok: true, signal: last.signal, chain: last.chain };
+  else { if (scanBusy(res)) return; try { built = await buildTickerSignal(ticker, { sideEffects: false }); } catch (e) { return res.json({ ok: false, error: 'options data error: ' + e.message }); } }
   if (!built.ok || !built.signal) return res.json({ ok: false, error: built.error || 'no options data for ticker' });
   const sig = built.signal;
   // gather real extras for AI context (no fabrication; each optional)
@@ -714,14 +594,6 @@ app.get('/api/shadow/:ticker', requireAuth, async (req, res) => {
 
 // ON-DEMAND SCAN — the ONLY thing that spends options-provider quota in bulk. Deliberately manual
 // (no timer) so API usage is user-triggered. One run at a time; the child is detached from the request.
-const BASELINES = new BaselineStore();
-const V2_STATE = new Map();          // ticker -> anti-flicker state (in-memory, per process)
-const V2_PREVFLOW = new Map();       // ticker -> previous delta-weighted flow (for acceleration)
-const MARKET_CTX = new MarketContext(OPT_PROVIDER);   // SPY/QQQ fetched once per 5 min, shared
-const IV_SKEW = new IvSkewTracker();
-const EARNINGS = new EarningsCalendar(OPT_PROVIDER);
-const SECTOR_TIDE = { data: null, at: 0 };
-const READINESS = { rvol: null, ivSkew: null, sector: null };
 
 const SCAN_STATE = { running: false, startedAt: null, finishedAt: null, lastOk: null, message: '', limit: null };
 app.post('/api/scan/run', requireAuth, (req, res) => {
@@ -807,9 +679,13 @@ app.get('/api/research/readiness', requireAuth, (req, res) => {
   try {
     const recs = readJournal();
     const report = baselineReport(recs);
-    res.json({ ok: true, readiness: researchReadiness({
+    // readiness is per ticker: ?ticker=XYZ, else the most recently computed ticker
+    const want = req.query.ticker ? String(req.query.ticker).toUpperCase() : null;
+    const entries = [...PIPE.readiness.entries()];
+    const rd = (want ? PIPE.readiness.get(want) : (entries.length ? entries[entries.length - 1][1] : null)) || { rvol: null, ivSkew: null, sector: null };
+    res.json({ ok: true, ticker: want || (entries.length ? entries[entries.length - 1][0] : null), readiness: researchReadiness({
       report, journalCount: recs.length,
-      rvol: READINESS.rvol, ivSkew: READINESS.ivSkew, sector: READINESS.sector,
+      rvol: rd.rvol, ivSkew: rd.ivSkew, sector: rd.sector,
       macro: macroReadiness({ uwSupportsMacroCalendar: false }),
     }), uw: { ...UW_LIMITER.stats(), ...optionsProviderStatus(process.env) } });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
@@ -831,7 +707,7 @@ app.get('/api/validated/ranking', requireAuth, async (req, res) => {
       .sort((a, b) => (ranks.perTicker[b].composite) - (ranks.perTicker[a].composite)).slice(0, topN);
     const out = [];
     for (const t of names) {                       // bounded per-ticker current-score computation
-      try { const built = await buildTickerSignal(t); const sig = built.signal; if (!sig) continue;
+      try { const built = await buildTickerSignal(t, { sideEffects: false }); const sig = built.signal; if (!sig) continue;
         const v = computeValidated({ current: { score: sig.finalScore, dir: sig.dir, tier: sig.tier }, featureInputs: {}, promotion: PROMOTION });
         out.push({ ticker: t, current: sig.finalScore, validated: v.validatedScore, delta: v.delta, dir: sig.dir, tier: v.tier });
       } catch {}
@@ -848,7 +724,7 @@ app.get('/api/validated/:ticker', requireAuth, async (req, res) => {
   if (!ticker) return res.json({ ok: false, error: 'Invalid ticker' });
   if (OPT_PROVIDER.name === 'null') return res.json({ ok: false, error: OPT_PROVIDER.reason || 'No options provider configured' });
   try {
-    const built = await buildTickerSignal(ticker); const sig = built.signal;
+    const built = await buildTickerSignal(ticker, { sideEffects: false }); const sig = built.signal;
     if (!sig) return res.json({ ok: false, error: built.error || 'no signal' });
     let featureInputs = {}; try { featureInputs = shadowToFeatureInputs(await buildShadowBlock(ticker)); } catch {}
     const validated = computeValidated({ current: { score: sig.finalScore, dir: sig.dir, tier: sig.tier }, featureInputs, promotion: PROMOTION });

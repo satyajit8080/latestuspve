@@ -79,8 +79,9 @@ test('fire-and-forget safety: never throws, even with garbage input (req 10)', a
 });
 
 test('logs shadow sweep/flow when the provider supplies it (C bucket populated)', async () => {
-  const flowProvider = { name: 'pve', getFlowDetailed: async () => ({ available: true, trades: [{ premium: 3e6, size: 1500, right: 'call', direction: 'buy', golden: true, dte: 25, otm_percent: 4, isOpening: true }] }) };
-  await logSignal({ provider: flowProvider, ticker: 'FFF', sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T18:00:00Z') });
+  // flow is passed in (already fetched by the pipeline): logSignal must not make a second UW call
+  const flowDetailed = { available: true, largeTrades: [{ premium: 3e6, size: 1500, right: 'call', direction: 'buy', golden: true, dte: 25, otm_percent: 4, isOpening: true }] };
+  await logSignal({ flowDetailed, ticker: 'FFF', sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T18:00:00Z') });
   const [r] = readAll().filter((x) => x.ticker === 'FFF');
   assert.equal(r.shadowOnly.flow.available, true);
   assert.ok(r.shadowOnly.flow.goldenCount >= 1);

@@ -61,7 +61,7 @@ function _dedupe(id) {
  *   scoredAgg = snapshot of sig.agg taken BEFORE the PVE gex/iv overrides (so we log the values the
  *   score actually used, immune to the later display override).
  */
-export async function logSignal({ provider, ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, shadowScore = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null } = {}) {
+export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, shadowScore = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null, flowDetailed = null } = {}) {
   try {
     if (!sig || !ticker) return;
     const dir = sig.dir;
@@ -85,7 +85,7 @@ export async function logSignal({ provider, ticker, sig, scoredAgg = {}, underly
 
     // (C) shadow-only sweep/flow classification — experimental; off the response path; best-effort.
     let shadowFlow = null;
-    try { if (provider && typeof provider.getFlowDetailed === 'function') { const flow = await provider.getFlowDetailed(ticker).catch(() => null); if (flow) { const fq = computeFlowQuality(flow); shadowFlow = { available: !!fq.available, quality: isNum(fq.score) ? Math.round(fq.score) : null, direction: fq.direction, netSignedPremium: fq.netSignedPremium, goldenCount: fq.goldenCount, sweepSampleSize: fq.sampleSize }; } } } catch { shadowFlow = null; }
+    try { if (flowDetailed && flowDetailed.available) { const fq = computeFlowQuality({ available: true, trades: flowDetailed.largeTrades }); shadowFlow = { available: !!fq.available, quality: isNum(fq.score) ? Math.round(fq.score) : null, direction: fq.direction, netSignedPremium: fq.netSignedPremium, goldenCount: fq.goldenCount, sweepSampleSize: fq.sampleSize }; } } catch { shadowFlow = null; }   // reuses the flow already fetched: no second UW call
 
     const rec = {
       schemaVersion: SIGNAL_LOG_SCHEMA, id, firedAt: firedAt.toISOString(), ticker: String(ticker).toUpperCase(),
