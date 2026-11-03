@@ -42,7 +42,7 @@ function blotter(host, query, setCleanup, isAlive) {
     { key: 'r60', label: '60m', align: 'r', sort: false, render: (r) => ret(r.r1h) },
     { key: 'status', label: 'Status', sort: false, render: (r) => h('span', { class: r.status === 'WIN' ? 'bull' : r.status === 'LOSS' ? 'bear' : 'dim' }, r.status) },
   ];
-  const table = createDataTable({ columns: cols, rowKey: (r) => r.id, sortable: false, label: 'Signal blotter', onOpen: (r) => openDetail(r.id), onSelect: () => {} });
+  const table = createDataTable({ columns: cols, rowKey: (r) => r.id, sortable: false, label: 'Signal blotter', onOpen: (r) => openDetail(r.id), onSelect: (r, click) => { if (click) openDetail(r.id); } });
   const input = (k, ph, w) => h('input', { class: 'input', placeholder: ph, value: f[k], dataset: k === 'ticker' ? { search: '1' } : {}, aria: { label: ph }, oninput: (e) => { f[k] = e.target.value.toUpperCase(); debounce(); } });
   const sel = (k, opts, label) => h('select', { class: 'select', aria: { label }, onchange: (e) => { f[k] = e.target.value; f.offset = 0; load(); persist(); } }, opts.map(([l, v]) => h('option', { value: v, selected: f[k] === v }, l)));
   let t = 0; const debounce = () => { clearTimeout(t); t = setTimeout(() => { f.offset = 0; load(); persist(); }, 250); };

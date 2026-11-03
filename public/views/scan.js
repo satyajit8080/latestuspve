@@ -63,8 +63,9 @@ export function renderScan(root, { query, runScan, cal, inspector, refresh }) {
     if (snap && ms.rth && fr.level === 'offline') bn.push(h('div', { class: 'banner warn', role: 'alert' }, `This snapshot is ${Math.round(age / 60000)} minutes old and the market is open. Run a scan for fresh scores.`));
     if (state.conn.failures >= 3) bn.push(h('div', { class: 'banner err', role: 'alert' }, 'Reconnecting to the server… the table below is the last data received.'));
     mount(banners, bn);
+    if (!snap && sc.running) { mount(tableHost, emptyState('Scan in progress', `${isNum(sc.done) && isNum(sc.total) ? sc.done + ' of ' + sc.total + ' tickers done. ' : ''}Results appear here as tickers finish.`)); meta.textContent = ''; return; }
     if (!snap) { mount(tableHost, state.authInfo && state.authInfo.options && state.authInfo.options.configured === false ? emptyState('No data provider configured', 'Set OPTIONS_PROVIDER=uw and UNUSUAL_WHALES_API_TOKEN in .env, then restart the server.') : emptyState('No scan yet', 'Run a scan to rank the Unusual Whales universe.', h('button', { class: 'btn primary', onclick: runScan }, 'Run scan'))); meta.textContent = ''; return; }
-    meta.textContent = `${snap.scored ?? '—'} scored · ${snap.skipped ?? 0} skipped · primary ${snap.primary || 'opt'}`;
+    meta.textContent = `${snap.partial ? 'PARTIAL · ' : ''}${snap.scored ?? '—'} scored · ${snap.skipped ?? 0} skipped · primary ${snap.primary || 'opt'}`;
     if (!allRows.length) { mount(tableHost, emptyState('Snapshot has no usable rows', 'The last scan produced no scored tickers.')); return; }
     if (!list.length) { mount(tableHost, emptyState('No tickers match the filters', `${allRows.length} tickers hidden by the current filters.`, h('button', { class: 'btn', onclick: () => { q = { ...q, min: '0', dir: '', tradeable: '', gated: '', sector: '', q: '' }; search.value = ''; sector.value = ''; [minSeg, dirSeg, gateSeg].forEach((s) => s._sync()); persist(); draw(); } }, 'Clear filters'))); return; }
     if (!tableHost.contains(table.el)) mount(tableHost, table.el);

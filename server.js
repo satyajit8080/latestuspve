@@ -211,7 +211,7 @@ const SCAN_STATE = { running: false, startedAt: null, finishedAt: null, lastOk: 
 app.post('/api/scan/run', requireAuth, (req, res) => {
   if (OPT_PROVIDER.name === 'null') return res.status(400).json({ ok: false, error: 'No options provider configured', reason: OPT_PROVIDER.reason || null });
   if (SCAN_STATE.running) return res.status(409).json({ ok: false, error: 'A scan is already running', state: SCAN_STATE });
-  const limit = Math.max(1, Math.min(500, Number(req.body && req.body.limit) || Number(process.env.SCAN_LIMIT) || 500));
+  const limit = Math.max(1, Math.min(500, Number(req.body && req.body.limit) || Number(process.env.SCAN_LIMIT) || 200));
   const script = path.join(__dirname, 'research', 'scan-universe.js');
   if (!fs.existsSync(script)) return res.status(500).json({ ok: false, error: 'scan-universe.js not found' });
   SCAN_STATE.running = true; SCAN_STATE.done = null; SCAN_STATE.total = null; SCAN_STATE.etaMs = null; SCAN_STATE.startedAt = new Date().toISOString(); SCAN_STATE.finishedAt = null; SCAN_STATE.lastOk = null; SCAN_STATE.message = 'running'; SCAN_STATE.limit = limit;
@@ -250,7 +250,7 @@ app.get('/api/signals/us', requireAuth, (req, res) => {
   res.json({
     ok: true, available: true, generatedAt: cache.generatedAt, ageSeconds: Math.round(ageMs / 1000),
     dataStatus: ageMs < 20 * 60000 ? 'MARKET DATA LIVE' : 'MARKET DATA DELAYED',
-    universe: cache.universe, scored: cache.scored, skipped: cache.skipped, count: rows.length,
+    universe: cache.universe, scored: cache.scored, skipped: cache.skipped, count: rows.length, partial: !!cache.partial, done: cache.done ?? null, total: cache.total ?? null,
     primary: PROMOTION.primary,
     rows,
     note: 'productionScore is the published score; v2Score is a shadow challenger and never modifies it. confidence is a data/conviction score, not a probability of profit.',

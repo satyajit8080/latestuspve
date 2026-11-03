@@ -1,7 +1,7 @@
 // Session-aware polling of ZERO-UW-COST endpoints only. Pauses when hidden, backs off x2 (max 60 s) on errors, +-10% jitter.
 export const POLLABLE = ['/api/scan/status', '/api/signals/us', '/api/research/readiness', '/auth/status', '/api/journal/resolve/status'];
 const TABLE = {   // seconds: [RTH, PRE/POST, CLOSED, scanRunning]
-  scan: [15, 30, 120, 2], signals: [30, 60, 0, 0], readiness: [15, 30, 120, 5], auth: [120, 120, 300, 0], resolve: [30, 60, 120, 5],
+  scan: [15, 30, 120, 2], signals: [30, 60, 0, 5], readiness: [15, 30, 120, 5], auth: [120, 120, 300, 0], resolve: [30, 60, 120, 5],
 };
 export function cadenceMs(key, sessionState, scanRunning) {
   const row = TABLE[key]; if (!row) return 0;

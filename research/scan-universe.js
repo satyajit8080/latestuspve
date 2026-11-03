@@ -66,8 +66,8 @@ export async function computeRow(P, ticker, opt) {
 export async function main() {
   const key = process.env.UNUSUAL_WHALES_API_TOKEN;
   const dir = process.env.SCAN_DIR || path.join(ROOT, 'research-data', 'scan');
-  const limit = Math.max(1, Math.min(500, Number(process.env.SCAN_LIMIT || 500)));   // universe size (UW screener cap)
-  const gap = Number(process.env.SCAN_GAP_MS || 400);
+  const limit = Math.max(1, Math.min(500, Number(process.env.SCAN_LIMIT || 200)));   // universe size per run (UW screener cap 500)
+  const gap = Number(process.env.SCAN_GAP_MS || 100);
   if (!key) { console.error('UNUSUAL_WHALES_API_TOKEN required.'); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
 
@@ -89,26 +89,35 @@ export async function main() {
   if (!tickers.length) { console.error('empty universe from /screener (warming or off-hours) — wrote nothing.'); process.exit(0); }
   let sectorMap = {}; try { sectorMap = await P.getCompanies(tickers); sectorMap = Object.fromEntries(Object.entries(sectorMap).map(([k, v]) => [k, v && v.sector])); } catch {}
 
-  let rows = []; let ok = 0, skipped = 0, rateLimited = 0;
+  let rows = []; let ok = 0, skipped = 0, rateLimited = 0, stop = false, next = 0, done = 0;
   const started = Date.now();
-  for (let i = 0; i < tickers.length; i++) {
-    const t = tickers[i];
-    try { const row = await computeRow(P, t, { sectorMap, gap, ctx }); rows.push(row); if (isNum(row.productionScore)) ok++; else skipped++; }
-    catch (e) {
-      rows.push({ ticker: t, error: e.message }); skipped++;
-      // If UW says the quota is gone, stop early and keep what we have (partial scan) rather
-      // than grinding through hundreds of guaranteed failures.
-      if (e && (e.rateLimited || /quota exhausted|429/i.test(String(e.message)))) {
-        rateLimited++;
-        if (rateLimited >= 5) { console.error(`stopping early after ${i + 1}/${tickers.length}: UW quota exhausted`); break; }
+  const concurrency = Math.max(1, Math.min(8, Number(process.env.SCAN_CONCURRENCY || 4)));
+  const outPath = path.join(dir, 'latest.json');
+  // Results are written PROGRESSIVELY so the dashboard shows tickers as they finish instead of staying blank until the end.
+  const writeSnapshot = (partial) => {
+    const sorted = rows.slice().sort((a, b) => (b.productionScore ?? -1) - (a.productionScore ?? -1));
+    const tmp = outPath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ generatedAt: new Date().toISOString(), universe: 'screener', requested: tickers.length, scored: ok, skipped, partial: !!partial, done, total: tickers.length, rows: sorted }) + '\n');
+    fs.renameSync(tmp, outPath);
+  };
+  async function worker() {
+    while (!stop) {
+      const i = next++; if (i >= tickers.length) return;
+      const t = tickers[i];
+      try { const row = await computeRow(P, t, { sectorMap, gap, ctx }); rows.push(row); if (isNum(row.productionScore)) ok++; else skipped++; }
+      catch (e) {
+        rows.push({ ticker: t, error: e.message }); skipped++;
+        // If UW says the quota is gone, stop early and keep what we have rather than grinding through guaranteed failures.
+        if (e && (e.rateLimited || /quota exhausted|429/i.test(String(e.message)))) { rateLimited++; if (rateLimited >= 5) { stop = true; console.error(`stopping early after ${done + 1}/${tickers.length}: UW quota exhausted`); } }
+      }
+      done++;
+      if (done % 5 === 0 || done === tickers.length) {
+        console.log(`  ${done}/${tickers.length} scanned (${ok} scored, ${skipped} skipped) · ${Math.round((Date.now() - started) / 1000)}s`);
+        try { writeSnapshot(done < tickers.length); } catch { /* best effort; the final write below reports errors */ }
       }
     }
-    if ((i + 1) % 25 === 0 || i + 1 === tickers.length) {
-      const el = Math.round((Date.now() - started) / 1000);
-      console.log(`  ${i + 1}/${tickers.length} scanned (${ok} scored, ${skipped} skipped) · ${el}s`);
-    }
-    await sleep(gap);
   }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
   rows.sort((a, b) => (b.productionScore ?? -1) - (a.productionScore ?? -1));
   // spec §23 — cross-sectional rank across the universe each cycle
   let _xs = { available: false };
@@ -116,7 +125,8 @@ export async function main() {
 
   const uw = limiter.stats();
   const out = { crossSectional: _xs.available ? { universe: _xs.universe, topBullish: _xs.topBullish, topBearish: _xs.topBearish, topDecile: _xs.topDecileTickers } : null, generatedAt: new Date().toISOString(), universe: 'screener', requested: tickers.length, scored: ok, skipped, partial: rateLimited >= 5, uwCalls: uw.requestsThisScan, uwRemaining: uw.uwRemaining, count: rows.length, rows };
-  const p = path.join(dir, 'latest.json');
+  const p = outPath;
+  out.partial = false; out.done = tickers.length; out.total = tickers.length;
   fs.writeFileSync(p, JSON.stringify(out) + '\n');
   console.log(`scanned ${ok}/${tickers.length} tickers (skipped ${skipped}) · ${uw.requestsThisScan} UW calls${isNum(uw.uwRemaining) ? `, ${uw.uwRemaining} remaining today` : ''} -> ${p}`);
   process.exit(0);
