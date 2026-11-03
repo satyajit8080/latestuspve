@@ -10,7 +10,7 @@
 // All functions here are PURE (no I/O, no clock, no network) so they are deterministic and testable.
 
 export const JOURNAL_SCHEMA_VERSION = 'journal-1.0.0';
-export const JOURNAL_MIN_SCORE = 70;              // spec: record every call rated >= 70
+export const JOURNAL_ALERT_MIN = 70;              // UI/alert filter only. Every non-neutral signal is journaled (research needs the full score range).
 export const CHECKPOINTS = ['15m', '30m', '60m', 'close'];
 export const CHECKPOINT_MS = { '15m': 15 * 60000, '30m': 30 * 60000, '60m': 60 * 60000 };  // 'close' resolved by session end
 export const TARGET_ATR = 1.0;   // target/stop expressed in ATR multiples (Phase 1 labels)
@@ -22,6 +22,7 @@ const pct = (a, b) => (isNum(a) && isNum(b) && b !== 0 ? ((a - b) / b) * 100 : n
 
 // Human-readable labels for the engine's feature keys.
 export const FACTOR_LABELS = {
+  signedPremium: 'Aggressor-signed premium flow', cpVolumeZ: 'Call/put volume skew vs own history',
   cpVolume: 'Call/put volume pressure', oiChange: 'Open-interest change', largePremium: 'Large premium flow',
   volOIAnomaly: 'Volume vs open-interest anomaly', ivBehavior: 'Implied-volatility behaviour',
   gexContext: 'Dealer gamma exposure', strikeConc: 'Strike concentration', liquidity: 'Options liquidity',
@@ -32,7 +33,7 @@ export const labelOf = (k) => FACTOR_LABELS[k] || k;
 // WHY THIS CALL WAS GENERATED  (generated at signal time; immutable thereafter)
 // ---------------------------------------------------------------------------
 export function explainSignal(rec) {
-  if (!rec || !rec.composite) return null;
+  if (!rec || !rec.composite || (rec.composite.dir !== 'bull' && rec.composite.dir !== 'bear')) return null;   // shadow-only rows have no production call to explain
   const dir = rec.composite.dir;
   const comps = (rec.scored && Array.isArray(rec.scored.components)) ? rec.scored.components : [];
   const dirBit = dir === 'bull' ? 1 : dir === 'bear' ? -1 : 0;
@@ -57,14 +58,13 @@ export function explainSignal(rec) {
 
   // --- options-flow reasoning (from the three directional features) ---
   const f = (k) => withContrib.find((c) => c.key === k) || null;
-  const cpv = f('cpVolume'), oic = f('oiChange'), lp = f('largePremium');
   const flowBits = [];
-  if (cpv) flowBits.push(`call/put volume pressure ${cpv.dir === dirBit ? 'supports' : 'opposes'} the ${dir} read (strength ${cpv.strength})`);
-  else flowBits.push('call/put volume pressure unavailable');
-  if (oic) flowBits.push(`open-interest change ${oic.dir === dirBit ? 'confirms' : 'contradicts'} it (strength ${oic.strength})`);
-  else flowBits.push('open-interest change unavailable (no prior snapshot)');
-  if (lp) flowBits.push(`large-premium flow ${lp.dir === dirBit ? 'agrees' : 'disagrees'} (strength ${lp.strength})`);
-  else flowBits.push('large-premium flow unavailable');
+  for (const key of ['signedPremium', 'cpVolumeZ', 'cpVolume', 'oiChange', 'largePremium']) {
+    const c = f(key);
+    if (c) flowBits.push(`${labelOf(key).toLowerCase()} ${c.dir === dirBit ? 'supports' : 'opposes'} the ${dir} read (strength ${c.strength})`);
+    else if (comps.some((x) => x.key === key)) flowBits.push(`${labelOf(key).toLowerCase()} unavailable`);
+  }
+  if (!flowBits.length) flowBits.push('no directional flow evidence available');
 
   // --- stock / momentum confirmation ---
   const stockScore = rec.composite.stockScore, confirm = rec.composite.stockConfirm;
@@ -100,7 +100,7 @@ export function explainSignal(rec) {
     summary,
     whyScoreReached: `Final ${rec.composite.finalScore} = primary ${rec.composite.primary} × data-quality ${rec.composite.dataQuality}%. `
       + `Primary blends options ${rec.composite.optionsScore} (weight .60) with stock ${stockScore} (weight .25, signed ${confirm === 1 ? '+1 agree' : confirm === -1 ? '-1 conflict' : '0 neutral'}). `
-      + `It cleared the ${JOURNAL_MIN_SCORE}+ journal threshold and the 65+ signal threshold.`,
+      + `Journal alert threshold: ${JOURNAL_ALERT_MIN}+.`,
     strongestFactors: strongest,
     weakestFactors: weakest,
     conflictingFactors: conflicting,
@@ -117,29 +117,31 @@ export function explainSignal(rec) {
 // REASON CODES (spec §20) — deterministic; every code is backed by a computed value.
 export function reasonCodes(rec) {
   const out = [];
+  if (!rec || !rec.composite || (rec.composite.dir !== 'bull' && rec.composite.dir !== 'bear')) return out;
   const push = (code, contribution, explanation) => out.push({ code, contribution: isNum(contribution) ? r2(contribution) : null, explanation });
   const c = rec.composite || {}, ctx = rec.context || {}, comps = (rec.scored && rec.scored.components) || [];
   const dirBit = c.dir === 'bull' ? 1 : -1;
   const f = (k) => comps.find((x) => x.key === k);
   const bull = c.dir === 'bull';
 
-  const lp = f('largePremium');
-  if (lp && lp.avail && lp.strength > 0) {
-    if (lp.dir === dirBit) push(bull ? 'SIGNED_FLOW_BULLISH' : 'SIGNED_FLOW_BEARISH', lp.weight * lp.strength, `Large-premium flow agrees (strength ${r2(lp.strength)}).`);
-    else push('FLOW_NOT_CONFIRMED', -(lp.weight * lp.strength), 'Large-premium flow opposes the signal direction.');
+  // Production reason codes (distinct from the v2 shadow's codes).
+  const sp = f('signedPremium') || f('largePremium');
+  if (sp && sp.avail && sp.strength > 0) {
+    if (sp.dir === dirBit) push(bull ? 'PREMIUM_FLOW_BULLISH' : 'PREMIUM_FLOW_BEARISH', sp.weight * sp.strength, `Aggressor-signed premium flow agrees (strength ${r2(sp.strength)}).`);
+    else push('PREMIUM_FLOW_CONFLICT', -(sp.weight * sp.strength), 'Aggressor-signed premium flow opposes the signal direction.');
   }
-  const cpv = f('cpVolume');
-  if (cpv && cpv.avail && cpv.dir === dirBit && cpv.strength >= 0.8) push('DELTA_FLOW_EXTREME', cpv.weight * cpv.strength, `Call/put volume pressure is extreme (strength ${r2(cpv.strength)}).`);
+  const cpv = f('cpVolumeZ') || f('cpVolume');
+  if (cpv && cpv.avail && cpv.dir === dirBit && cpv.strength >= 0.8) push('CP_VOLUME_EXTREME', cpv.weight * cpv.strength, `Call/put volume skew is extreme (strength ${r2(cpv.strength)}).`);
   const oic = f('oiChange');
-  if (oic && oic.avail && oic.dir === dirBit) push(bull ? 'OPENING_FLOW_BULLISH' : 'OPENING_FLOW_BEARISH', oic.weight * oic.strength, 'Open interest is building in the signal direction.');
+  if (oic && oic.avail && oic.dir === dirBit) push(bull ? 'OI_BUILD_BULLISH' : 'OI_BUILD_BEARISH', oic.weight * oic.strength, 'Open interest is building in the signal direction.');
 
-  if (ctx.gammaRegime === 'negative') push('NEGATIVE_GAMMA_TREND_REGIME', null, 'Dealers short gamma — hedging is pro-cyclical, trend-supportive.');
-  else if (ctx.gammaRegime === 'positive') push('POSITIVE_GAMMA_MEAN_REVERSION', null, 'Dealers long gamma — hedging dampens moves, favors mean reversion.');
+  if (ctx.gammaRegime === 'negative') push('GAMMA_REGIME_NEGATIVE', null, 'Dealers short gamma (context only, not scored).');
+  else if (ctx.gammaRegime === 'positive') push('GAMMA_REGIME_POSITIVE', null, 'Dealers long gamma (context only, not scored).');
 
-  if (c.stockConfirm === 1) push('VWAP_CONFIRMED', null, 'Underlying price agrees with the options direction.');
-  else if (c.stockConfirm === -1) push('MARKET_CONFLICT', null, 'Underlying price conflicts with the options direction.');
-  if (isNum(ctx.rvol)) push(ctx.rvol >= 1.5 ? 'RVOL_CONFIRMED' : 'RVOL_LOW', null, `RVOL ${r2(ctx.rvol)}x vs same-time-of-day baseline.`);
-  if (ctx.earningsWithin2Days) push('EARNINGS_RISK', null, 'Earnings within ~2 trading days — intraday labels may be distorted.');
+  if (c.stockConfirm === 1) push('PRICE_CONFIRMS', null, 'Underlying price agrees with the options direction.');
+  else if (c.stockConfirm === -1) push('PRICE_CONFLICTS', null, 'Underlying price conflicts with the options direction.');
+  if (isNum(ctx.rvol)) push(ctx.rvol >= 1.5 ? 'RVOL_HIGH' : 'RVOL_LOW', null, `RVOL ${r2(ctx.rvol)}x vs same-time-of-day baseline.`);
+  if (ctx.earningsWithin2Days) push('EARNINGS_GATE', null, 'Earnings within ~2 trading days.');
   const liq = f('liquidity');
   if (liq && liq.avail && liq.strength < 0.3) push('LOW_LIQUIDITY', null, 'Thin options liquidity.');
   return out;
@@ -149,7 +151,7 @@ export function reasonCodes(rec) {
 // OUTCOME MATH — pure; callers supply bars captured AFTER the signal.
 // ---------------------------------------------------------------------------
 // bars: [{ t: epochMs, price }] strictly AFTER entry time, up to the checkpoint.
-export function computeCheckpoint({ entryStock, entryOption = null, bars = [], optionBars = [], dir = 'bull', atr = null, entryTs = null }) {
+export function computeCheckpoint({ entryStock, entryOption = null, bars = [], optionBars = [], dir = 'bull', atr = null, entryTs = null, horizonMin = 390, benchmarkBars = null }) {
   const clean = bars.filter((b) => isNum(b.price));
   if (!isNum(entryStock) || !clean.length) return { status: 'unavailable', reason: 'no price data after signal' };
   const sign = dir === 'bear' ? -1 : 1;
@@ -164,7 +166,9 @@ export function computeCheckpoint({ entryStock, entryOption = null, bars = [], o
   const optLast = optionBars.length && isNum(optionBars[optionBars.length - 1].price) ? optionBars[optionBars.length - 1].price : null;
 
   // ATR-normalized return + target/stop labels (never fabricated: null when ATR unavailable)
-  const atrPct = (isNum(atr) && isNum(entryStock) && entryStock > 0) ? (atr / entryStock) * 100 : null;
+  // The daily ATR is unreachable in 15 minutes: scale it to the horizon (sqrt-of-time; a full 390-minute session = 1x).
+  const hScale = isNum(horizonMin) && horizonMin > 0 ? Math.sqrt(Math.min(horizonMin, 390) / 390) : 1;
+  const atrPct = (isNum(atr) && isNum(entryStock) && entryStock > 0) ? (atr / entryStock) * 100 * hScale : null;
   const atrRet = (isNum(dirRet) && isNum(atrPct) && atrPct > 0) ? r2(dirRet / atrPct) : null;
   let targetReached = null, stopReached = null, timeToTargetMs = null, timeToStopMs = null;
   if (isNum(atrPct) && atrPct > 0) {
@@ -190,6 +194,8 @@ export function computeCheckpoint({ entryStock, entryOption = null, bars = [], o
     maxFavorablePct: r2(favorable), maxAdversePct: r2(adverse),
     directionalReturnPct: r2(dirRet), atrNormalizedReturn: atrRet,
     targetReached, stopReached, timeToTargetMs, timeToStopMs, outcome,
+    benchmarkReturnPct: benchmarkBars && benchmarkBars.length >= 2 && isNum(benchmarkBars[0].price) && isNum(benchmarkBars[benchmarkBars.length - 1].price) ? r2(pct(benchmarkBars[benchmarkBars.length - 1].price, benchmarkBars[0].price)) : null,   // SPY over the same window (unsigned)
+    horizonMin: isNum(horizonMin) ? horizonMin : null,
     samples: clean.length,
   };
 }
@@ -258,7 +264,7 @@ export function computeLearning(records, { horizon = '30m', minSample = 5 } = {}
   const ret30 = all.filter((r) => r.outcomes && r.outcomes['30m'] && r.outcomes['30m'].status === 'resolved').map((r) => r.outcomes['30m'].directionalReturnPct).filter(isNum);
 
   // score buckets
-  const buckets = [[70, 80], [80, 90], [90, 101]].map(([lo, hi]) => {
+  const buckets = [[0, 50], [50, 60], [60, 70], [70, 80], [80, 90], [90, 101]].map(([lo, hi]) => {
     const inB = done.filter((r) => r.composite.finalScore >= lo && r.composite.finalScore < hi);
     return { range: `${lo}-${hi === 101 ? 100 : hi - 1}`, n: inB.length, winRate: inB.length ? r2((inB.filter((r) => ret(r) > 0).length / inB.length) * 100) : null, avgReturn: avg(inB.map(ret)), gated: inB.length < minSample };
   });
@@ -273,7 +279,9 @@ export function computeLearning(records, { horizon = '30m', minSample = 5 } = {}
       const agreed = c.directional ? c.dir === dirBit : true;
       const k = c.key;
       factorStats[k] = factorStats[k] || { key: k, label: labelOf(k), n: 0, wins: 0, returns: [], agreedN: 0 };
-      factorStats[k].n++; if (agreed) factorStats[k].agreedN++;
+      // a directional factor that pointed AGAINST the call did not 'cause' this call: only agreeing samples count
+      if (!agreed) continue;
+      factorStats[k].n++; factorStats[k].agreedN++;
       if (ret(r) > 0) factorStats[k].wins++;
       factorStats[k].returns.push(ret(r));
     }
@@ -300,7 +308,7 @@ export function computeLearning(records, { horizon = '30m', minSample = 5 } = {}
     horizon, minSample,
     totals: { signals: all.length, resolved: done.length, winners: winners.length, losers: losers.length },
     winRate: done.length ? r2((winners.length / done.length) * 100) : null,
-    avg30mReturn: avg(ret30), avg1hReturn: avg(done.map(ret)),
+    avg30mReturn: avg(ret30), avgReturn: avg(done.map(ret)),   // avgReturn is for the selected horizon
     avgMaxFavorable: avg(done.map((r) => r.outcomes[horizon].maxFavorablePct).filter(isNum)),
     avgMaxAdverse: avg(done.map((r) => r.outcomes[horizon].maxAdversePct).filter(isNum)),
     scoreBuckets: buckets,
@@ -320,7 +328,7 @@ export function journalRow(r) {
   const resolved30 = oc('30m'), resolved1h = oc('60m');
   return {
     id: r.id, ticker: r.ticker, firedAt: r.firedAt, dir: r.composite.dir,
-    signal: r.composite.dir === 'bull' ? 'CALL' : 'PUT',
+    signal: r.composite.dir === 'bull' ? 'CALL' : r.composite.dir === 'bear' ? 'PUT' : 'WATCH',
     score: r.composite.finalScore, v2Score: r.v2 && isNum(r.v2.score) ? r.v2.score : null,
     entryStock: r.entry ? r.entry.stockPrice : null, entryOption: r.entry ? r.entry.optionPrice : null,
     r30m: resolved30, r1h: resolved1h,

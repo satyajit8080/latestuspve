@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { explainSignal, computeCheckpoint, analyzeOutcome, computeLearning, filterJournal, journalRow, JOURNAL_MIN_SCORE } from '../store/journal.js';
+import { explainSignal, computeCheckpoint, analyzeOutcome, computeLearning, filterJournal, journalRow, JOURNAL_ALERT_MIN } from '../store/journal.js';
 import { readJournal, appendOutcome, pendingOutcomes } from '../store/journal-store.js';
 
 const mkRec = (over = {}) => ({
@@ -149,6 +149,6 @@ test('journal row + filtering: status reflects resolution state', () => {
   assert.equal(filterJournal([pending, winner, loser], { sort: 'best' }).rows[0].id, 'B');
 });
 
-test('journal threshold constant matches the spec (>= 70)', () => {
-  assert.equal(JOURNAL_MIN_SCORE, 70);
+test('the 70+ threshold is an alert/UI filter, not a write filter', () => {
+  assert.equal(JOURNAL_ALERT_MIN, 70);
 });

@@ -79,13 +79,15 @@ test('reason codes are evidence-backed and flag conflicts', () => {
     ] },
   };
   const codes = reasonCodes(rec).map((c) => c.code);
-  assert.ok(codes.includes('FLOW_NOT_CONFIRMED'));            // largePremium opposes
-  assert.ok(codes.includes('DELTA_FLOW_EXTREME'));
-  assert.ok(codes.includes('NEGATIVE_GAMMA_TREND_REGIME'));
-  assert.ok(codes.includes('MARKET_CONFLICT'));               // stock conflicts
-  assert.ok(codes.includes('RVOL_CONFIRMED'));
-  assert.ok(codes.includes('EARNINGS_RISK'));
+  assert.ok(codes.includes('PREMIUM_FLOW_CONFLICT'));         // largePremium (legacy row) opposes
+  assert.ok(codes.includes('CP_VOLUME_EXTREME'));
+  assert.ok(codes.includes('GAMMA_REGIME_NEGATIVE'));
+  assert.ok(codes.includes('PRICE_CONFLICTS'));               // stock conflicts
+  assert.ok(codes.includes('RVOL_HIGH'));
+  assert.ok(codes.includes('EARNINGS_GATE'));
   assert.ok(codes.includes('LOW_LIQUIDITY'));
+  // production codes are distinct from the v2 shadow's codes
+  for (const v2code of ['DELTA_FLOW_EXTREME', 'OPENING_FLOW_BULLISH', 'OPENING_FLOW_BEARISH', 'SIGNED_FLOW_BULLISH', 'SIGNED_FLOW_BEARISH', 'MARKET_CONFLICT', 'VWAP_CONFIRMED']) assert.ok(!codes.includes(v2code), v2code);
 });
 
 test('baselineReport segments by gamma regime / time-of-day and never fabricates', () => {

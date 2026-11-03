@@ -75,7 +75,7 @@ export function pendingOutcomes(records, now = Date.now(), checkpointMs = { '15m
     for (const [h, ms] of Object.entries(checkpointMs)) {
       const cur = r.outcomes && r.outcomes[h];
       if (cur && cur.status === 'resolved') continue;
-      if (now >= fired + ms) due.push({ id: r.id, ticker: r.ticker, horizon: h, firedAt: r.firedAt, entry: r.entry || null, dir: r.composite ? r.composite.dir : null, atr: (r.context && isNum(r.context.atr)) ? r.context.atr : null, checkpointAt: new Date(fired + ms).toISOString() });
+      if (now >= fired + ms) due.push({ id: r.id, ticker: r.ticker, horizon: h, firedAt: r.firedAt, entry: r.entry || null, dir: r.composite ? r.composite.dir : null, v2Dir: r.v2 ? r.v2.dir : null, atr: (r.context && isNum(r.context.atr)) ? r.context.atr : null, checkpointAt: new Date(fired + ms).toISOString() });
     }
   }
   return due;

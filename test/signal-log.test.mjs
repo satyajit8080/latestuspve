@@ -48,17 +48,17 @@ test('separates A (scored) / B (displayed-not-scored) with no ambiguous field', 
   assert.equal(r.entryPrice, 191.2);
 });
 
-test('dedupe: one record per ticker per 5-min bucket', async () => {
+test('dedupe: one record per ticker per 30-min bucket', async () => {
   const t = 'BBB';
   await logSignal({ provider: providerNoFlow, ticker: t, sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T15:01:00Z') });
-  await logSignal({ provider: providerNoFlow, ticker: t, sig: makeSig({ finalScore: 99 }), scoredAgg, underlying, now: new Date('2026-08-24T15:04:59Z') }); // same 5-min bucket → dropped
+  await logSignal({ provider: providerNoFlow, ticker: t, sig: makeSig({ finalScore: 99 }), scoredAgg, underlying, now: new Date('2026-08-24T15:29:59Z') }); // same 30-min bucket → dropped
   const same = readAll().filter((r) => r.ticker === t);
   assert.equal(same.length, 1);
-  await logSignal({ provider: providerNoFlow, ticker: t, sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T15:06:00Z') }); // next bucket → kept
+  await logSignal({ provider: providerNoFlow, ticker: t, sig: makeSig(), scoredAgg, underlying, now: new Date('2026-08-24T15:31:00Z') }); // next bucket → kept
   assert.equal(readAll().filter((r) => r.ticker === t).length, 2);
 });
 
-test('skips neutral signals (req 3: dir != neutral only)', async () => {
+test('skips neutral signals (unless the v2 shadow has a directional score)', async () => {
   await logSignal({ provider: providerNoFlow, ticker: 'CCC', sig: makeSig({ dir: 'neutral' }), scoredAgg, underlying, now: new Date('2026-08-24T16:00:00Z') });
   assert.equal(readAll().filter((r) => r.ticker === 'CCC').length, 0);
 });
@@ -73,4 +73,17 @@ test('fire-and-forget safety: never throws, even with garbage input (req 10)', a
 test('no secret leakage in records', () => {
   const blob = JSON.stringify(readAll());
   assert.ok(!/SECRET|Bearer|sk-or-/.test(blob));
+});
+
+test('journals every non-neutral scored signal, including scores below 70 (full range for rank IC)', async () => {
+  await logSignal({ ticker: 'LOW', sig: makeSig({ finalScore: 42 }), scoredAgg, underlying, now: new Date('2026-08-24T18:00:00Z') });
+  const r = readAll().filter((x) => x.ticker === 'LOW');
+  assert.equal(r.length, 1); assert.equal(r[0].composite.finalScore, 42);
+});
+
+test('a v2-only (production neutral) directional signal is journaled as a research row without a production explanation', async () => {
+  await logSignal({ ticker: 'V2O', sig: makeSig({ dir: 'neutral', finalScore: 10 }), v2: { score: 66, dir: 'bear', gated: false }, scoredAgg, underlying, now: new Date('2026-08-24T18:05:00Z') });
+  const r = readAll().filter((x) => x.ticker === 'V2O');
+  assert.equal(r.length, 1); assert.equal(r[0].composite.dir, 'neutral'); assert.equal(r[0].v2.dir, 'bear');
+  assert.equal(r[0].explain, null); assert.deepEqual(r[0].reasons, []);
 });

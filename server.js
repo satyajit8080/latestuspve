@@ -236,7 +236,7 @@ app.get('/api/journal/signal/:id', requireAuth, (req, res) => {
 app.get('/api/journal/stats', requireAuth, (req, res) => {
   try {
     const recs = readJournal();
-    res.json({ ok: true, learning: computeLearning(recs, { horizon: req.query.horizon || '1h' }), pending: pendingOutcomes(recs).length });
+    res.json({ ok: true, learning: computeLearning(recs, { horizon: req.query.horizon || '60m' }), pending: pendingOutcomes(recs).length });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 // On-demand outcome resolution (spends provider quota only when pressed).

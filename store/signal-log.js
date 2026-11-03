@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OPTIONS_FEATURE_DEFS } from '../public/options-engine.js';
-import { explainSignal, reasonCodes, JOURNAL_MIN_SCORE, CHECKPOINTS } from './journal.js';
+import { explainSignal, reasonCodes, CHECKPOINTS } from './journal.js';
 
 export const SIGNAL_LOG_SCHEMA = 'signal-log-1.1.0';   // 1.1.0: removed pve{}, shadowOnly{}, shadowScore, forward{} (old rows stay readable)
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
@@ -41,9 +41,9 @@ function timeBucket(d) {
     return 'afterhours';
   } catch { return null; }
 }
-function bucket5min(d) { const t = d.getTime(); return new Date(Math.floor(t / 300000) * 300000).toISOString(); }
+function bucket30min(d) { const t = d.getTime(); return new Date(Math.floor(t / 1800000) * 1800000).toISOString(); }
 
-// In-memory dedupe: one record per ticker per 5-min bucket, safe across repeated dashboard/scan calls
+// In-memory dedupe: one record per ticker per 30-min bucket, safe across repeated dashboard/scan calls
 // in the same process. Deterministic id also lets the offline resolver/report dedupe across restarts.
 const _seen = new Map(); // id -> ts
 function _dedupe(id) {
@@ -62,12 +62,16 @@ function _dedupe(id) {
 export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null } = {}) {
   try {
     if (!sig || !ticker) return;
+    // Journal every non-neutral scored signal (production OR v2 shadow) as a research row. Filtering to a minimum
+    // score here would restrict the score range and make rank IC across the range unmeasurable; the 70+ cut is a
+    // UI/alert filter (JOURNAL_ALERT_MIN), not a write filter.
     const dir = sig.dir;
-    if (dir === 'neutral' || dir == null) return;              // req 3: dir != neutral only
-    if (!isNum(sig.finalScore) || sig.finalScore < JOURNAL_MIN_SCORE) return;   // Signal Journal: only calls rated >= 70
+    const prodOk = dir !== 'neutral' && dir != null && isNum(sig.finalScore);
+    const v2Ok = !!(v2 && isNum(v2.score) && (v2.dir === 'bull' || v2.dir === 'bear'));
+    if (!prodOk && !v2Ok) return;
     const firedAt = (now instanceof Date ? now : new Date());
-    const id = `${String(ticker).toUpperCase()}:${bucket5min(firedAt)}`;
-    if (!_dedupe(id)) return;                                   // req 3: 5-min/ticker dedupe
+    const id = `${String(ticker).toUpperCase()}:${bucket30min(firedAt)}`;
+    if (!_dedupe(id)) return;                                   // one row per ticker per 30 minutes
 
     const a = sig.agg || {};
     const under = underlying && typeof underlying === 'object' ? underlying : null;
@@ -85,7 +89,7 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
     const rec = {
       schemaVersion: SIGNAL_LOG_SCHEMA, id, firedAt: firedAt.toISOString(), ticker: String(ticker).toUpperCase(),
       signalType: 'options', optionsEngineVersion: sig.optionsEngineVersion || null,
-      composite: { finalScore: sig.finalScore, dir, tier: sig.tier, primary: sig.primary, optionsScore: sig.optionsScore, stockScore: sig.stockScore, dataQuality: sig.dataQuality },
+      composite: { finalScore: sig.finalScore, dir, tier: sig.tier, primary: sig.primary, optionsScore: sig.optionsScore, stockScore: sig.stockScore, stockConfirm: sig.stockConfirm ?? null, dataQuality: sig.dataQuality },
       scored: {                                                 // (A) used in production scoring
         gexChainComputed: isNum(scoredAgg.gex) ? scoredAgg.gex : null,
         atmIV: isNum(scoredAgg.atmIV) ? scoredAgg.atmIV : null,

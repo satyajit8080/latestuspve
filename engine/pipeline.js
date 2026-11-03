@@ -134,7 +134,7 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
 
   // Entry option price: ATM contract on the signal's side, captured now (never back-filled).
   let entryOption = null;
-  if (isNum(spot)) {
+  if (isNum(spot) && (sig.dir === 'bull' || sig.dir === 'bear')) {
     const want = sig.dir === 'bull' ? 'call' : 'put';
     const cands = chain.contracts.filter((x) => x && x.type === want && isNum(x.strike) && (isNum(x.bid) || isNum(x.ask) || isNum(x.last)));
     if (cands.length) {
