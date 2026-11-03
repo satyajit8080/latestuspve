@@ -3,6 +3,7 @@
 // Every fetch is cached and shared across tickers so the rate-limit cost stays flat.
 
 import { timeBucket } from '../store/normalize.js';
+import { etCalendarDaysUntil } from '../lib/time.js';
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const r2 = (x) => (isNum(x) ? Math.round(x * 100) / 100 : null);
@@ -13,10 +14,11 @@ const r2 = (x) => (isNum(x) ? Math.round(x * 100) / 100 : null);
 // Cumulative session volume up to now, compared with what this ticker normally
 // has done by this clock time. Insufficient history => null (never a fake 1.0).
 export async function computeRvol({ baselines, ticker, intraday, at, record = true }) {
-  if (!baselines || !intraday || !intraday.available || !Array.isArray(intraday.rawBars)) {
+  if (!baselines || !intraday || !intraday.available || !Array.isArray(intraday.sessionBars)) {
     return { available: false, rvol: null, reason: 'no_intraday_volume' };
   }
-  const sessionVol = intraday.rawBars.reduce((a, b) => a + (isNum(b.volume) ? b.volume : 0), 0);
+  // RTH bars of the latest session only (rawBars spans sessions and extended hours).
+  const sessionVol = intraday.sessionBars.reduce((a, b) => a + (isNum(b.volume) ? b.volume : 0), 0);
   if (!sessionVol) return { available: false, rvol: null, reason: 'no_volume_data' };
 
   const norm = baselines.normalize(ticker, 'sessionVolume', sessionVol, at);
@@ -63,7 +65,12 @@ export class IvSkewTracker {
   // contracts: normalized chain contracts with {type, strike, iv}
   snapshot(contracts, spot) {
     if (!Array.isArray(contracts) || !isNum(spot)) return null;
-    const near = contracts.filter((c) => isNum(c.iv) && c.iv > 0 && isNum(c.strike));
+    let near = contracts.filter((c) => isNum(c.iv) && c.iv > 0 && isNum(c.strike));
+    // One expiry only: the nearest with >= 7 DTE. Mixing expiries makes IV changes meaningless.
+    const dte = (c) => (c.expiration ? etCalendarDaysUntil(String(c.expiration).slice(0, 10)) : null);
+    const exps = [...new Set(near.map((c) => c.expiration).filter(Boolean))].filter((e) => { const d = etCalendarDaysUntil(String(e).slice(0, 10)); return d != null && d >= 7; }).sort();
+    if (!exps.length) return null;
+    near = near.filter((c) => c.expiration === exps[0]);
     if (near.length < 4) return null;
     const atmOf = (type) => {
       const set = near.filter((c) => c.type === type);
@@ -73,7 +80,7 @@ export class IvSkewTracker {
     // OTM put = 5-15% below spot; used for the smirk
     const otmPuts = near.filter((c) => c.type === 'put' && c.strike < spot * 0.95 && c.strike > spot * 0.85);
     const otmPutIv = otmPuts.length ? otmPuts.reduce((a, c) => a + c.iv, 0) / otmPuts.length : null;
-    return { callIv: atmOf('call'), putIv: atmOf('put'), otmPutIv, at: Date.now() };
+    return { callIv: atmOf('call'), putIv: atmOf('put'), otmPutIv, expiry: exps[0], at: Date.now() };
   }
 
   // Returns CHANGES vs the previous snapshot for this ticker, then stores the new one.
@@ -82,13 +89,13 @@ export class IvSkewTracker {
     if (!snap) return { available: false, reason: 'insufficient_iv_data' };
     const prev = this.prev.get(ticker);
     this.prev.set(ticker, snap);
-    if (!prev || Date.now() - prev.at > this.maxAgeMs) return { available: false, reason: 'no_prior_snapshot' };
+    if (!prev || Date.now() - prev.at > this.maxAgeMs || prev.expiry !== snap.expiry) return { available: false, reason: 'no_prior_snapshot' };
     const d = (a, b) => (isNum(a) && isNum(b) ? a - b : null);
     return {
       available: true,
       callIvChange: d(snap.callIv, prev.callIv),
       putIvChange: d(snap.putIv, prev.putIv),
-      atmIvChange: d((snap.callIv + snap.putIv) / 2, (prev.callIv + prev.putIv) / 2),
+      atmIvChange: (isNum(snap.callIv) && isNum(snap.putIv) && isNum(prev.callIv) && isNum(prev.putIv)) ? ((snap.callIv + snap.putIv) / 2) - ((prev.callIv + prev.putIv) / 2) : null,
       otmPutIvChange: d(snap.otmPutIv, prev.otmPutIv),
       elapsedMs: snap.at - prev.at,
     };
@@ -108,9 +115,11 @@ export class EarningsCalendar {
     try {
       if (this.p && this.p.getEarnings) {
         const e = await this.p.getEarnings(ticker).catch(() => null);
-        const raw = e && (e.nextEarningsDate || e.next_earnings_date || e.date);
-        const ts = raw ? Date.parse(raw) : NaN;
-        if (Number.isFinite(ts)) days = Math.round((ts - Date.now()) / 86400000);
+        // Provider shape: { available, nextDate, daysToEarnings } (ET calendar days).
+        if (e && e.available !== false) {
+          if (isNum(e.daysToEarnings)) days = e.daysToEarnings;
+          else if (e.nextDate) days = etCalendarDaysUntil(String(e.nextDate).slice(0, 10));
+        }
       }
     } catch { days = null; }
     this.cache.set(ticker, { days, at: Date.now() });

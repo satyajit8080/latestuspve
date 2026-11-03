@@ -29,8 +29,10 @@ export function signedFlow(trades, { spot = null } = {}) {
     const bid = isNum(t.bidPremium) ? t.bidPremium : null;
     let askShare = null;
     if (isNum(ask) && isNum(bid) && ask + bid > 0) askShare = ask / (ask + bid);
-    else if (t.direction === 'ask' || t.direction === 'bullish') askShare = 1;
-    else if (t.direction === 'bid' || t.direction === 'bearish') askShare = 0;
+    // `direction` is aggressor side ONLY ('ask'|'bid'). bullish/bearish are NOT accepted: the call/put
+    // sign is applied exactly once below (dirSign), so a put bought at the ask is bearish.
+    else if (t.direction === 'ask') askShare = 1;
+    else if (t.direction === 'bid') askShare = 0;
     if (askShare == null) { sideUnknown++; continue; }
 
     const askPrem = prem * askShare, bidPrem = prem * (1 - askShare);
@@ -180,7 +182,8 @@ export function ivSkewChange({ callIvChange = null, putIvChange = null, atmIvCha
 export function eventGates({ earningsDaysAway = null, isOpex = false, isFomc = false, isCpi = false, timeBucket = null } = {}) {
   const gates = [];
   let blocked = false, multiplier = 1.0;
-  if (isNum(earningsDaysAway) && earningsDaysAway <= 2) { gates.push('EARNINGS_RISK'); blocked = true; }
+  if (isNum(earningsDaysAway) && earningsDaysAway >= 0 && earningsDaysAway <= 2) {   // a past date must not block forever
+    gates.push('EARNINGS_RISK'); blocked = true; }
   if (isOpex) { gates.push('OPEX'); multiplier *= 0.9; }
   if (isFomc) { gates.push('FOMC'); multiplier *= 0.85; }
   if (isCpi) { gates.push('CPI'); multiplier *= 0.85; }

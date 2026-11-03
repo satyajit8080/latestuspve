@@ -7,6 +7,7 @@
  * { available:false } on error — a bad field never crashes the app. UW numbers often arrive as
  * strings; n() coerces them.
  */
+import { etDate, etMinutes, etCalendarDaysUntil, RTH_OPEN_MIN, RTH_CLOSE_MIN } from '../lib/time.js';
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const n = (x) => (isNum(x) ? x : (typeof x === 'string' && x.trim() !== '' && Number.isFinite(+x) ? +x : null));
 const pick = (o, ...keys) => { if (!o) return null; for (const k of keys) { const v = n(o[k]); if (v != null) return v; } return null; };
@@ -14,6 +15,8 @@ const str = (o, ...keys) => { if (!o) return null; for (const k of keys) { const
 const sum = (o, ...keys) => { let t = 0, seen = false; for (const k of keys) { const v = n(o && o[k]); if (v != null) { t += v; seen = true; } } return seen ? t : null; };
 const arr = (j) => (Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : []));
 const enc = encodeURIComponent;
+// net premium needs BOTH sides; one missing side must not be treated as 0.
+const netPrem = (r) => { const c = n(r && r.net_call_premium), p = n(r && r.net_put_premium); return c != null && p != null ? c - p : null; };
 const last = (a) => (Array.isArray(a) && a.length ? a[a.length - 1] : null);
 
 // OCC option symbol → {type, strike, expiration}. e.g. NVDA261218P00019000 → put 190 2026-12-18
@@ -100,7 +103,7 @@ export class UnusualWhalesOptionsProvider {
           type: occ ? occ.type : (type.startsWith('c') ? 'call' : type.startsWith('p') ? 'put' : type),
           strike: occ ? occ.strike : pick(o, 'strike', 'strike_price'),
           expiration: occ ? occ.expiration : str(o, 'expiry', 'expiration', 'expiration_date'),
-          volume: pick(o, 'volume', 'total_volume', 'day_volume'), openInterest: pick(o, 'open_interest', 'oi', 'prev_oi', 'open_interest_change'),
+          volume: pick(o, 'volume', 'total_volume', 'day_volume'), openInterest: pick(o, 'open_interest', 'oi', 'prev_oi'),   // NOT open_interest_change: a change is not a level
           iv: pick(o, 'implied_volatility', 'iv', 'iv_end'),
           delta: pick(o, 'delta'), gamma: pick(o, 'gamma'), theta: pick(o, 'theta'), vega: pick(o, 'vega'),
           bid, ask, mid: isNum(bid) && isNum(ask) ? (bid + ask) / 2 : pick(o, 'mid', 'last', 'last_price', 'avg_price'),
@@ -181,19 +184,25 @@ export class UnusualWhalesOptionsProvider {
       const rows = arr(await this._get(`/api/stock/${enc(ticker.toUpperCase())}/flow-alerts?limit=${enc(limit)}`));
       const nowMs = Date.now();
       const trades = rows.map((r) => {
-        const right = (str(r, 'type', 'option_type') || '').toLowerCase().startsWith('p') ? 'put' : 'call';
+        const t = (str(r, 'type', 'option_type') || '').toLowerCase();
+        const right = t.startsWith('p') ? 'put' : t.startsWith('c') ? 'call' : null;   // unknown type => skipped, never defaulted to call
+        if (!right) return null;
         const askPrem = pick(r, 'total_ask_side_prem'), bidPrem = pick(r, 'total_bid_side_prem');
-        const askDominant = isNum(askPrem) && isNum(bidPrem) ? askPrem > bidPrem : null;
-        const direction = askDominant == null ? null : (right === 'call' ? (askDominant ? 'bullish' : 'bearish') : (askDominant ? 'bearish' : 'bullish'));
+        // `direction` is the AGGRESSOR SIDE only ('ask' = bought at the offer, 'bid' = sold at the bid).
+        // It is NOT bullish/bearish: for puts, ask-side buying is bearish. signedFlow applies call/put sign once.
+        const direction = isNum(askPrem) && isNum(bidPrem) && askPrem !== bidPrem ? (askPrem > bidPrem ? 'ask' : 'bid') : null;
         const exp = str(r, 'expiry'); const dte = exp && !Number.isNaN(Date.parse(exp)) ? Math.max(0, Math.round((Date.parse(exp) - nowMs) / 86400000)) : pick(r, 'dte');
         const spot = pick(r, 'underlying_price'), strike = pick(r, 'strike');
+        const created = str(r, 'created_at', 'start_time'); const ts = created ? Date.parse(created) : NaN;
         return {
-          premium: pick(r, 'total_premium'), size: pick(r, 'total_size', 'volume'), right, side: right, direction, golden: !!(r.has_sweep && r.all_opening_trades),
+          premium: pick(r, 'total_premium'), askPremium: askPrem, bidPremium: bidPrem, size: pick(r, 'total_size', 'volume'), right, side: right, direction,
+          option_symbol: str(r, 'option_chain', 'option_symbol', 'symbol'), ts: Number.isFinite(ts) ? ts : null,
+          golden: !!(r.has_sweep && r.all_opening_trades),
           is_golden_sweep: !!(r.has_sweep && r.all_opening_trades), is_sweep: !!r.has_sweep, is_opening: !!r.all_opening_trades,
           trade_type: str(r, 'alert_rule'), dte, otm_percent: isNum(spot) && isNum(strike) && spot > 0 ? Math.abs(strike - spot) / spot : null,
           open_interest: pick(r, 'open_interest'), volOiRatio: pick(r, 'volume_oi_ratio'),
         };
-      });
+      }).filter(Boolean);
       return { available: trades.length > 0, trades };
     } catch (e) { return { available: false, error: e.message }; }
   }
@@ -236,15 +245,21 @@ export class UnusualWhalesOptionsProvider {
   async getIntraday(ticker, { candle = '5m', limit = 120 } = {}) {
     try {
       const rows = arr(await this._get(`/api/stock/${enc(ticker.toUpperCase())}/ohlc/${enc(candle)}?limit=${enc(limit)}`));
-      const bars = rows.map((b) => ({ date: String(str(b, 'start_time', 'date', 'timestamp') || '').slice(0, 10), h: pick(b, 'high'), l: pick(b, 'low'), c: pick(b, 'close'), o: pick(b, 'open'), v: pick(b, 'volume') })).filter((b) => isNum(b.c) && isNum(b.v) && b.date);
-      if (bars.length < 2) return { available: false };
-      const latest = bars.reduce((m, b) => (b.date > m ? b.date : m), '');   // most recent session present
-      const session = bars.filter((b) => b.date === latest);
-      let pv = 0, vol = 0; for (const b of session) { const tp = (b.h + b.l + b.c) / 3; pv += tp * b.v; vol += b.v; }
+      // Timestamps are parsed BEFORE filtering so a dropped row can never shift timestamps onto the wrong bar.
+      const all = rows.map((b) => { const t = Date.parse(str(b, 'start_time', 'date', 'timestamp') || ''); return { t, date: etDate(t), min: etMinutes(t), h: pick(b, 'high'), l: pick(b, 'low'), c: pick(b, 'close'), o: pick(b, 'open'), v: pick(b, 'volume') }; })
+        .filter((b) => Number.isFinite(b.t) && isNum(b.c) && isNum(b.v));
+      if (all.length < 2) return { available: false };
+      // rawBars: every bar (any session, incl. extended hours) for the outcome resolver's forward windows.
+      const rawBars = all.map((b) => ({ t: b.t, price: b.c, high: b.h, low: b.l, volume: b.v }));
+      // sessionBars: the most recent ET session, regular trading hours only (09:30-16:00). VWAP and session volume use these.
+      const latest = all.reduce((m, b) => (b.date > m ? b.date : m), '');
+      const sessionBars = all.filter((b) => b.date === latest && b.min >= RTH_OPEN_MIN && b.min < RTH_CLOSE_MIN)
+        .map((b) => ({ t: b.t, open: b.o, high: b.h, low: b.l, close: b.c, price: b.c, volume: b.v }));
+      if (!sessionBars.length) return { available: false, reason: 'no_rth_bars', sessionDate: latest, rawBars };
+      let pv = 0, vol = 0; for (const b of sessionBars) { if (!isNum(b.high) || !isNum(b.low)) continue; pv += ((b.high + b.low + b.close) / 3) * b.volume; vol += b.volume; }
       const vwap = vol > 0 ? pv / vol : null;
-      // rawBars carry epoch timestamps so the outcome resolver can slice a leakage-safe window.
-      const rawBars = bars.map((b, i) => ({ t: Date.parse(str(rows[i], 'start_time', 'date', 'timestamp') || ''), price: b.c, high: b.h, low: b.l, volume: b.v })).filter((b) => Number.isFinite(b.t) && isNum(b.price));
-      return { available: isNum(vwap), vwap, sessionOpen: session[0] ? session[0].o : null, last: session[session.length - 1].c, sessionDate: latest, bars: session.length, rawBars };
+      const sessionVolume = sessionBars.reduce((a, b) => a + b.volume, 0);
+      return { available: isNum(vwap), vwap, sessionOpen: sessionBars[0].open ?? null, last: sessionBars[sessionBars.length - 1].close, sessionDate: latest, bars: sessionBars.length, sessionVolume, sessionBars, rawBars };
     } catch (e) { return { available: false, error: e.message }; }
   }
 
@@ -273,9 +288,9 @@ export class UnusualWhalesOptionsProvider {
       const mapped = rows.map((r) => ({
         ticker: (str(r, 'ticker', 'symbol') || '').toUpperCase(), sector: str(r, 'sector') || null, name: str(r, 'full_name') || null,
         premium: sum(r, 'call_premium', 'put_premium'), totalPremium: sum(r, 'call_premium', 'put_premium'),
-        net_premium: (isNum(pick(r, 'net_call_premium')) || isNum(pick(r, 'net_put_premium'))) ? (n(r.net_call_premium) || 0) - (n(r.net_put_premium) || 0) : null,
+        net_premium: netPrem(r),
         // camelCase alias — consumers (cross-section, scan) read netPremium
-        netPremium: (isNum(pick(r, 'net_call_premium')) || isNum(pick(r, 'net_put_premium'))) ? (n(r.net_call_premium) || 0) - (n(r.net_put_premium) || 0) : null,
+        netPremium: netPrem(r),
         bullishPremium: pick(r, 'bullish_premium'), bearishPremium: pick(r, 'bearish_premium'),
         callVolume: pick(r, 'call_volume'), putVolume: pick(r, 'put_volume'), putCallRatio: pick(r, 'put_call_ratio'),
         ivRank: pick(r, 'iv_rank'), gexRatio: pick(r, 'gex_ratio'), marketcap: pick(r, 'marketcap'),
@@ -284,10 +299,20 @@ export class UnusualWhalesOptionsProvider {
     } catch (e) { return { available: false, error: e.message }; }
   }
 
+  // /info cached per ET trading day and shared by getCompanies + getEarnings.
+  async _info(ticker) {
+    const t = String(ticker).toUpperCase(); const day = etDate(Date.now());
+    if (!this._infoCache) this._infoCache = new Map();
+    const hit = this._infoCache.get(t);
+    if (hit && hit.day === day) return hit.data;
+    const data = (await this._get(`/api/stock/${enc(t)}/info`)).data || {};
+    this._infoCache.set(t, { day, data });
+    return data;
+  }
   // sector/company — prefer screener; fall back to bounded per-ticker /info
   async getCompanies(tickers = []) {
     const map = {}; const list = [...new Set(tickers.map((t) => String(t).toUpperCase()))].slice(0, 60);
-    for (const t of list) { try { const d = (await this._get(`/api/stock/${enc(t)}/info`)).data || {}; map[t] = { sector: str(d, 'sector') || null, industry: str(d, 'issue_type') || null, name: str(d, 'full_name', 'short_name') || null }; } catch { map[t] = { sector: null, industry: null, name: null }; } }
+    for (const t of list) { try { const d = (await this._info(t)) || {}; map[t] = { sector: str(d, 'sector') || null, industry: str(d, 'issue_type') || null, name: str(d, 'full_name', 'short_name') || null }; } catch { map[t] = { sector: null, industry: null, name: null }; } }
     return map;
   }
   async getTopIvRank({ limit = 250 } = {}) {
@@ -295,8 +320,12 @@ export class UnusualWhalesOptionsProvider {
     catch (e) { return { available: false, error: e.message }; }
   }
   async getEarnings(ticker) {
-    try { const d = (await this._get(`/api/stock/${enc(ticker.toUpperCase())}/info`)).data || {}; const next = str(d, 'next_earnings_date'); if (!next || Number.isNaN(Date.parse(next))) return { available: false, nextDate: null, daysToEarnings: null }; return { available: true, nextDate: String(next).slice(0, 10), daysToEarnings: Math.round((Date.parse(next) - Date.now()) / 86400000) }; }
-    catch (e) { return { available: false, error: e.message }; }
+    try {
+      const d = (await this._info(ticker)) || {}; const next = str(d, 'next_earnings_date');
+      if (!next || Number.isNaN(Date.parse(next))) return { available: false, nextDate: null, daysToEarnings: null };
+      // Calendar days in America/New_York (a date-only string parsed as UTC would be off by one).
+      return { available: true, nextDate: String(next).slice(0, 10), daysToEarnings: etCalendarDaysUntil(String(next).slice(0, 10)) };
+    } catch (e) { return { available: false, error: e.message }; }
   }
   async getMaxPain(ticker) {
     try { const d = last(arr(await this._get(`/api/stock/${enc(ticker.toUpperCase())}/max-pain`))) || {}; const mp = pick(d, 'max_pain'); return { available: isNum(mp), maxPain: mp, expiry: str(d, 'expiry') }; }

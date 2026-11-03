@@ -7,7 +7,7 @@ import path from 'node:path';
 import { computeRvol, MarketContext, IvSkewTracker, EarningsCalendar, eventFlags, crossSectionalRank } from '../engine/context.js';
 import { BaselineStore } from '../store/normalize.js';
 
-const intraday = (vols) => ({ available: true, rawBars: vols.map((v, i) => ({ t: i, price: 100, volume: v })) });
+const intraday = (vols) => ({ available: true, sessionBars: vols.map((v, i) => ({ t: i, price: 100, volume: v })) });
 
 test('RVOL needs real history and never fakes 1.0', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rv-'));
@@ -56,7 +56,8 @@ test('MarketContext degrades gracefully when the provider fails', async () => {
 
 test('IV skew requires a prior snapshot and then reports CHANGES', () => {
   const t = new IvSkewTracker();
-  const cs = [{ type: 'call', strike: 100, iv: 0.30 }, { type: 'put', strike: 100, iv: 0.32 }, { type: 'put', strike: 90, iv: 0.40 }, { type: 'call', strike: 110, iv: 0.28 }];
+  const exp = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const cs = [{ type: 'call', strike: 100, iv: 0.30 }, { type: 'put', strike: 100, iv: 0.32 }, { type: 'put', strike: 90, iv: 0.40 }, { type: 'call', strike: 110, iv: 0.28 }].map((c) => ({ ...c, expiration: exp }));
   assert.equal(t.update('X', cs, 100).available, false);
   const next = cs.map((c) => ({ ...c, iv: c.iv + (c.type === 'call' ? 0.02 : -0.01) }));
   const u = t.update('X', next, 100);
@@ -72,8 +73,8 @@ test('IV skew refuses thin chains', () => {
 
 test('EarningsCalendar returns days away and caches; null when unknown', async () => {
   let calls = 0;
-  const soon = new Date(Date.now() + 86400000).toISOString();
-  const e = new EarningsCalendar({ getEarnings: async () => { calls++; return { nextEarningsDate: soon }; } });
+  // REAL provider shape: { available, nextDate, daysToEarnings }
+  const e = new EarningsCalendar({ getEarnings: async () => { calls++; return { available: true, nextDate: '2099-01-01', daysToEarnings: 1 }; } });
   assert.equal(await e.daysAway('X'), 1);
   await e.daysAway('X');
   assert.equal(calls, 1);                        // cached
@@ -104,4 +105,25 @@ test('cross-sectional ranking produces ranks, deciles and top lists', () => {
 test('cross-sectional ranking handles an empty universe', () => {
   const r = crossSectionalRank([{ ticker: 'A', productionScore: null }]);
   assert.equal(r.available, false);
+});
+
+test('EarningsCalendar derives days from nextDate in ET calendar days when daysToEarnings is absent', async () => {
+  const { etDate } = await import('../lib/time.js');
+  const today = etDate(Date.now());
+  const e = new EarningsCalendar({ getEarnings: async () => ({ available: true, nextDate: today }) });
+  assert.equal(await e.daysAway('Z'), 0);
+});
+
+test('IV skew: atmIvChange is null (not a number) when one side is missing; one expiry only', () => {
+  const t = new IvSkewTracker();
+  const exp = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const full = [{ type: 'call', strike: 100, iv: 0.3 }, { type: 'put', strike: 100, iv: 0.3 }, { type: 'put', strike: 90, iv: 0.4 }, { type: 'call', strike: 110, iv: 0.28 }].map((c) => ({ ...c, expiration: exp }));
+  t.update('X', full, 100);
+  const callsOnly = [95, 100, 105, 110].map((k) => ({ type: 'call', strike: k, iv: 0.3, expiration: exp }));   // no puts at all
+  const u = t.update('X', callsOnly, 100);
+  assert.equal(u.available, true);
+  assert.equal(u.putIvChange, null);
+  assert.equal(u.atmIvChange, null);
+  const near = full.map((c) => ({ ...c, expiration: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10) }));
+  assert.equal(new IvSkewTracker().update('Y', near, 100).reason, 'insufficient_iv_data');   // < 7 DTE only
 });

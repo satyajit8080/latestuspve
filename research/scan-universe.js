@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { etDate } from '../lib/time.js';
 import { crossSectionalRank } from '../engine/context.js';
 import { scoreV2, V2_VERSION } from '../engine/v2.js';
 import { signedFlow } from '../engine/features.js';
@@ -29,7 +30,7 @@ const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
 // Intraday endpoints (stock-state, option-contracts, flow-alerts, net-prem-ticks, ohlc/5m) are
 // NEVER cached — they must stay live. Nothing is fabricated: a cache miss re-fetches from UW.
 function dailyCacheDir(baseDir) {
-  const day = new Date().toISOString().slice(0, 10);
+  const day = etDate(Date.now());   // ET trading date, not UTC
   const d = path.join(baseDir, `daily-${day}`);
   try { fs.mkdirSync(d, { recursive: true }); } catch {}
   return d;
@@ -37,9 +38,10 @@ function dailyCacheDir(baseDir) {
 /** Fetch a daily-static value via cache: read today's file if present, else call fn() and persist. */
 async function cachedDaily(cacheDir, ticker, name, fn) {
   const fp = path.join(cacheDir, `${ticker}.${name}.json`);
-  try { const txt = fs.readFileSync(fp, 'utf8'); return JSON.parse(txt); } catch {}
+  try { const txt = fs.readFileSync(fp, 'utf8'); const hit = JSON.parse(txt); if (hit && hit.available === true) return hit; } catch {}
   const val = await fn();
-  try { if (val != null) fs.writeFileSync(fp, JSON.stringify(val)); } catch {}
+  // Persist successes only: a cached {available:false} failure would otherwise poison the whole day.
+  try { if (val != null && val.available === true) fs.writeFileSync(fp, JSON.stringify(val)); } catch {}
   return val;
 }
 

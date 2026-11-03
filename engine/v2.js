@@ -63,7 +63,9 @@ export function scoreV2({
   if (price.available && dir) {
     const confirmed = dir === 'bull' ? price.bullConfirmed : price.bearConfirmed;
     const mag = isNum(price.vwapDistanceAtr) ? clamp(Math.abs(price.vwapDistanceAtr) / 1.5, 0, 1) : (isNum(price.vsVwapPct) ? clamp(Math.abs(price.vsVwapPct) / 2, 0, 1) : 0);
-    priceScore = confirmed === true ? mag * 100 : confirmed === false ? 0 : 50 * mag;
+    // confirmed === null means VWAP is unavailable: the component is UNAVAILABLE (null), never 0.
+    priceScore = confirmed === true ? mag * 100 : confirmed === false ? 0 : null;
+    if (confirmed == null) quality.flags.push('price_vwap_unavailable');
     if (confirmed === true) push('VWAP_CONFIRMED', mag, `Price ${price.vsVwapPct}% vs VWAP, ${isNum(price.vwapDistanceAtr) ? price.vwapDistanceAtr + ' ATR' : 'distance unnormalized'}.`);
     else if (confirmed === false) push('VWAP_CONFLICT', -mag, `Price is on the wrong side of VWAP for a ${dir} call.`);
   } else if (!price.available) quality.flags.push('price_unavailable');
