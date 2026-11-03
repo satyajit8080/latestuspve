@@ -46,6 +46,7 @@ export function renderScan(root, { query, runScan, cal, inspector, refresh }) {
   const count = h('span', { class: 'count num', role: 'status', aria: { live: 'polite' } });
   const meta = h('span', { class: 'muted' });
   const runBtn = h('button', { class: 'btn primary', onclick: runScan }, 'Run scan');
+  const dlBtn = h('a', { class: 'btn', href: '/api/export/scan.csv', download: '', title: 'Download the current scan snapshot as CSV' }, 'Download CSV');
   const refBtn = h('button', { class: 'btn', onclick: async () => { await refresh(); toast('Snapshot refreshed from cache (no data-provider calls)'); }, title: 'Re-read the cached snapshot. Makes no Unusual Whales calls.' }, 'Refresh');
   const banners = h('div');
   const tableHost = h('div');
@@ -79,7 +80,7 @@ export function renderScan(root, { query, runScan, cal, inspector, refresh }) {
     prevRanks = new Map(state.prevRanks);
   }
   mount(root,
-    h('div', { class: 'page-head' }, h('h1', {}, 'Scan'), meta, h('span', { class: 'grow' }), h('span', { id: 'scan-fresh' }), refBtn, runBtn),
+    h('div', { class: 'page-head' }, h('h1', {}, 'Scan'), meta, h('span', { class: 'grow' }), h('span', { id: 'scan-fresh' }), dlBtn, refBtn, runBtn),
     banners, h('div', { class: 'filterbar', role: 'search' }, minSeg, dirSeg, gateSeg, search, sector, count), tableHost);
   const freshHost = $('#scan-fresh', root);
   const paintFresh = () => { const s = state.signals; mount(freshHost, s && s.generatedAtMs ? freshBadge(s.generatedAtMs, state.session.state) : h('span', { class: 'dim' }, 'No snapshot')); };

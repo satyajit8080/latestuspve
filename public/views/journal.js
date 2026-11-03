@@ -21,7 +21,7 @@ export function renderJournal(root, { query }) {
   const tabs = h('div', { class: 'seg', role: 'tablist' }, TABS.map(([k, l]) => h('button', { role: 'tab', type: 'button', aria: { pressed: String(k === tab), selected: String(k === tab) }, onclick: () => { tab = k; replaceQuery('journal', null, { tab }); sync(); show(); } }, l)));
   const sync = () => [...tabs.children].forEach((b, i) => { b.setAttribute('aria-pressed', String(TABS[i][0] === tab)); b.setAttribute('aria-selected', String(TABS[i][0] === tab)); });
   const unsub = subscribe((w) => { if (w === 'resolve') { const r = state.resolve; resolveBtn.disabled = !!r.running; resolveBtn.textContent = r.running ? 'Resolving…' : 'Resolve outcomes'; } });
-  mount(root, h('div', { class: 'page-head' }, h('h1', {}, 'Journal'), tabs, h('span', { class: 'grow' }), resolveBtn), host);
+  mount(root, h('div', { class: 'page-head' }, h('h1', {}, 'Journal'), tabs, h('span', { class: 'grow' }), h('a', { class: 'btn', href: '/api/export/journal.csv', download: '', title: 'Download every journal row as CSV' }, 'Download CSV'), h('a', { class: 'btn', href: '/api/export/journal.json', download: '', title: 'Full records as JSON, including explanations and outcomes' }, 'JSON'), resolveBtn), host);
   function show() { cleanup(); cleanup = () => {}; mount(host, skeleton(8)); const f = { blotter, evaluation, learning }[tab]; f(host, query, (c) => { cleanup = c; }, () => alive); }
   show();
   return { destroy() { alive = false; unsub(); cleanup(); }, focusSearch() { const i = host.querySelector('[data-search]'); if (i) i.focus(); } };

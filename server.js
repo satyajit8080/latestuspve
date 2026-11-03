@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './lib/env.js';
+import { toCsv } from './lib/csv.js';
 import { resolveSecrets, LoginThrottle } from './lib/auth.js';
 import { makeOptionsProvider, optionsProviderStatus } from './providers/options.js';
 import { OpenRouterClient, configFromEnv as aiConfigFromEnv } from './providers/openrouter.js';
@@ -255,6 +256,35 @@ app.get('/api/signals/us', requireAuth, (req, res) => {
     rows,
     note: 'productionScore is the published score; v2Score is a shadow challenger and never modifies it. confidence is a data/conviction score, not a probability of profit.',
   });
+});
+
+// ---- Downloads (CSV/JSON). Read-only views of data already on disk; no Unusual Whales calls. ----
+const SCAN_COLS = [['ticker'], ['sector'], ['dir'], ['signal'], ['productionScore', 'score'], ['rawScore'], ['gated'], ['gateReasons'], ['actionable'], ['coverage'], ['tier'], ['price'], ['changePct'], ['vsVwapPct'], ['relativeVolume', 'rvol'], ['oiChangeNet', 'net_oi_change'], ['ivRank', 'iv_rank'], ['optionsLiquidity', 'liquidity'], ['v2Score', 'v2_score_shadow'], ['v2Dir', 'v2_dir_shadow'], ['engineVersion'], ['updatedAt']].map(([key, header]) => ({ key, header: header || key }));
+function sendDownload(res, name, type, body) {
+  res.setHeader('Content-Type', type + '; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="${name}"`); res.setHeader('Cache-Control', 'no-store'); res.send(body);
+}
+app.get('/api/export/scan.csv', requireAuth, (req, res) => {
+  let cache = null; try { cache = JSON.parse(fs.readFileSync(SCAN_CACHE, 'utf8')); } catch { /* none yet */ }
+  if (!cache || !Array.isArray(cache.rows)) return res.status(404).json({ ok: false, error: 'No scan yet' });
+  const rows = cache.rows.filter((r) => r && r.ticker && !r.error);
+  const stamp = String(cache.generatedAt || '').replace(/[:.]/g, '-').slice(0, 19) || 'scan';
+  sendDownload(res, `scan-${stamp}${cache.partial ? '-partial' : ''}.csv`, 'text/csv', toCsv(rows, SCAN_COLS));
+});
+app.get('/api/export/journal.csv', requireAuth, (req, res) => {
+  try {
+    const recs = readJournal();
+    const oc = (r, h, k) => (r.outcomes && r.outcomes[h] && r.outcomes[h].status === 'resolved' ? r.outcomes[h][k] : null);
+    const cols = [['id', (r) => r.id], ['ticker', (r) => r.ticker], ['firedAt', (r) => r.firedAt], ['dir', (r) => r.composite && r.composite.dir], ['score', (r) => r.composite && r.composite.finalScore], ['rawScore', (r) => r.composite && r.composite.rawScore],
+      ['gated', (r) => r.composite && r.composite.gated], ['gateReasons', (r) => r.composite && r.composite.gateReasons], ['tier', (r) => r.composite && r.composite.tier], ['entryStock', (r) => r.entry && r.entry.stockPrice], ['entryOption', (r) => r.entry && r.entry.optionPrice],
+      ['vsVwapPct', (r) => r.entry && r.entry.vsVwapPct], ['atr', (r) => r.context && r.context.atr], ['rvol', (r) => r.context && r.context.rvol], ['ret15m', (r) => oc(r, '15m', 'directionalReturnPct')], ['ret30m', (r) => oc(r, '30m', 'directionalReturnPct')], ['ret60m', (r) => oc(r, '60m', 'directionalReturnPct')],
+      ['stock30m', (r) => oc(r, '30m', 'stockChangePct')], ['spy30m', (r) => oc(r, '30m', 'benchmarkReturnPct')], ['engineVersion', (r) => r.optionsEngineVersion || (r.composite && r.composite.optionsEngineVersion)], ['legacyScore', (r) => r.legacyScore], ['v2Score', (r) => r.v2 && r.v2.score], ['v2Dir', (r) => r.v2 && r.v2.dir]]
+      .map(([header, get]) => ({ header, get }));
+    sendDownload(res, `journal-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv', toCsv(recs, cols));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.get('/api/export/journal.json', requireAuth, (req, res) => {
+  try { sendDownload(res, `journal-${new Date().toISOString().slice(0, 10)}.json`, 'application/json', JSON.stringify(readJournal(), null, 1)); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ---- SIGNAL JOURNAL (replaces Claude Review) -------------------------------
