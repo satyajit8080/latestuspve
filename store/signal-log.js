@@ -17,10 +17,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { OPTIONS_FEATURE_DEFS } from '../public/options-engine.js';
+import { OPTIONS_FEATURE_DEFS } from '../engine/options-engine.js';
 import { explainSignal, reasonCodes, CHECKPOINTS } from './journal.js';
 
-export const SIGNAL_LOG_SCHEMA = 'signal-log-1.1.0';   // 1.1.0: removed pve{}, shadowOnly{}, shadowScore, forward{} (old rows stay readable)
+export const SIGNAL_LOG_SCHEMA = 'signal-log-1.2.0';   // 1.2.0: composite gains rawScore/gated/gates/flags, drops stockScore; legacy{} added. 1.1.0: removed pve{}, shadowOnly{}, shadowScore, forward{}. Old rows stay readable.
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const DIR_KEYS = Object.entries(OPTIONS_FEATURE_DEFS).filter(([, d]) => d.directional).map(([k]) => k);
 
@@ -59,7 +59,7 @@ function _dedupe(id) {
  *   scoredAgg = snapshot of sig.agg taken BEFORE the UW gex/iv overrides (so we log the values the
  *   score actually used, immune to the later display override).
  */
-export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null } = {}) {
+export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null, prevHadSnapshot = false, now, entryOption = null, vsVwapPct = null, changePct = null, atr = null, vwap = null, legacy = null, rvol = null, marketRegime = null, earningsWithin2Days = null, v2 = null } = {}) {
   try {
     if (!sig || !ticker) return;
     // Journal every non-neutral scored signal (production OR v2 shadow) as a research row. Filtering to a minimum
@@ -89,7 +89,13 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
     const rec = {
       schemaVersion: SIGNAL_LOG_SCHEMA, id, firedAt: firedAt.toISOString(), ticker: String(ticker).toUpperCase(),
       signalType: 'options', optionsEngineVersion: sig.optionsEngineVersion || null,
-      composite: { finalScore: sig.finalScore, dir, tier: sig.tier, primary: sig.primary, optionsScore: sig.optionsScore, stockScore: sig.stockScore, stockConfirm: sig.stockConfirm ?? null, dataQuality: sig.dataQuality },
+      composite: {
+        finalScore: sig.finalScore, rawScore: isNum(sig.rawScore) ? sig.rawScore : null, gated: !!sig.gated, dir, tier: sig.tier, primary: sig.primary, optionsScore: sig.optionsScore,
+        stockConfirm: sig.stockConfirm ?? null, priceGate: sig.priceGate || null, gateReasons: Array.isArray(sig.gateReasons) ? sig.gateReasons : [], flags: Array.isArray(sig.flags) ? sig.flags : [],
+        actionable: sig.actionable ?? null, tradeable: sig.tradeable ?? null, coverage: isNum(sig.coverage) ? sig.coverage : null, availableDirectional: sig.availableDirectional ?? null,
+        dataQuality: sig.dataQuality, optionsEngineVersion: sig.optionsEngineVersion || null,
+      },
+      legacy: legacy || null,   // frozen opt-1.1.1 result on the same inputs (transition comparison; see legacy/README.md)
       scored: {                                                 // (A) used in production scoring
         gexChainComputed: isNum(scoredAgg.gex) ? scoredAgg.gex : null,
         atmIV: isNum(scoredAgg.atmIV) ? scoredAgg.atmIV : null,
@@ -106,7 +112,7 @@ export async function logSignal({ ticker, sig, scoredAgg = {}, underlying = null
         gammaFlip: isNum(a.gammaFlip) ? a.gammaFlip : null,
         callWall: sig.walls ? (sig.walls.call ?? null) : null, putWall: sig.walls ? (sig.walls.put ?? null) : null,
         ivRank: isNum(sig.ivRank) ? sig.ivRank : null, ivPercentile: isNum(sig.ivPercentile) ? sig.ivPercentile : null,
-        maxPain: isNum(scoredAgg.maxPain) ? scoredAgg.maxPain : null,
+        maxPain: isNum(a.maxPain) ? a.maxPain : null,
         price: isNum(price) ? price : null,
         prevClose: under && isNum(under.prevClose) ? under.prevClose : null,
       },

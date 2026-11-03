@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildOptionsSignal, aggregateChain } from '../public/options-engine.js';
+import { buildOptionsSignal, aggregateChain } from '../engine/options-engine.js';
 import { NullOptionsProvider } from '../providers/options.js';
 
 // ---- 3. No fabricated options data ----
@@ -25,7 +25,7 @@ test('BOUNDARY: missing greeks/iv/quotes → unavailable (GEX/IV/spread null, no
 // ---- 5. PVE_AGENT_KEY / secrets never in browser code ----
 test('BOUNDARY: browser assets never reference the agent key/header or process.env', () => {
   const pub = path.join(import.meta.dirname, '..', 'public');
-  for (const f of ['app.js', 'options-engine.js', 'index.html']) {
+  for (const f of ['app.js', 'index.html']) {
     const src = fs.readFileSync(path.join(pub, f), 'utf8');
     assert.equal(/X-Agent-Key/i.test(src), false, `${f} must not use X-Agent-Key`);
     assert.equal(/process\.env/.test(src), false, `${f} must not read process.env`);

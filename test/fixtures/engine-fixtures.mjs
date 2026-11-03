@@ -76,3 +76,33 @@ export function captureBaseline(sig) {
     agg: { gex: a.gex, gammaFlip: a.gammaFlip, maxPain: a.maxPain, cpVolRatio: a.cpVolRatio, cpOIRatio: a.cpOIRatio, volOIRatio: a.volOIRatio, atmIV: a.atmIV, strikeConcentration: a.strikeConcentration, avgSpread: a.avgSpread },
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// opt-1.2.0 baseline fixtures (context carries signed flow, daily OI change and per-ticker baselines).
+// Regenerate the frozen values ONLY on a deliberate scoring change: `node test/fixtures/regen-baseline-1.2.0.mjs`
+// and bump OPTIONS_ENGINE_VERSION.
+const NOW_RTH = Date.parse('2026-01-15T16:00:00Z');   // 11:00 ET
+const t = (right, ask, bid) => ({ right, side: right, askPremium: ask, bidPremium: bid, premium: ask + bid });
+const zz = (z, n = 20) => ({ z, n, available: true });
+const CTX_BULL = { flow: { trades: [t('call', 6e6, 0), t('call', 3e6, 0), t('put', 0, 5e5)] }, oiChange: { callOIChange: 9000, putOIChange: -1500 }, norm: { signedPremium: zz(2.8), grossPremium: { mean: 2e6, n: 20, available: true }, oiChange: zz(2.2), cpVolumeLog: zz(2.4) }, vwap: 98.5, atr: 2, now: NOW_RTH, earningsDaysAway: 30 };
+const CTX_BEAR = { flow: { trades: [t('put', 6e6, 0), t('put', 3e6, 0), t('call', 0, 5e5)] }, oiChange: { callOIChange: -1500, putOIChange: 9000 }, norm: { signedPremium: zz(-2.8), grossPremium: { mean: 2e6, n: 20, available: true }, oiChange: zz(-2.2), cpVolumeLog: zz(-2.4) }, vwap: 101.5, atr: 2, now: NOW_RTH, earningsDaysAway: 30 };
+export const FIXTURES_V2 = [
+  { name: 'bull', chain: bull, ctx: CTX_BULL },
+  { name: 'bull_price_conflict', chain: { ...bull, ticker: 'FIX_BULL_PC' }, ctx: { ...CTX_BULL, vwap: 103.5 } },
+  { name: 'bear', chain: bear, ctx: CTX_BEAR },
+  { name: 'neutral', chain: neutral, ctx: { now: NOW_RTH, earningsDaysAway: 30, vwap: 100, atr: 2 } },
+  { name: 'sparse', chain: sparse, ctx: { now: NOW_RTH } },
+  { name: 'bull_earnings_gated', chain: { ...bull, ticker: 'FIX_BULL_ER' }, ctx: { ...CTX_BULL, earningsDaysAway: 1 } },
+  { name: 'bull_after_hours', chain: { ...bull, ticker: 'FIX_BULL_AH' }, ctx: { ...CTX_BULL, now: Date.parse('2026-01-15T23:30:00Z') } },
+  { name: 'bull_cold_start', chain: { ...bull, ticker: 'FIX_BULL_CS' }, ctx: { flow: CTX_BULL.flow, oiChange: CTX_BULL.oiChange, vwap: 98.5, atr: 2, now: NOW_RTH, earningsDaysAway: 30 } },
+];
+export function captureBaselineV2(sig) {
+  const a = sig.agg || {};
+  return {
+    finalScore: sig.finalScore, rawScore: sig.rawScore, gated: sig.gated, dir: sig.dir, tier: sig.tier, optionsScore: sig.optionsScore, actionable: sig.actionable, tradeable: sig.tradeable,
+    stockConfirm: sig.stockConfirm, priceGate: sig.priceGate, gateReasons: sig.gateReasons, flags: sig.flags, availableDirectional: sig.availableDirectional,
+    coverage: Math.round(sig.coverage * 1000) / 1000, dataQuality: sig.dataQuality,
+    features: sig.features.map((f) => [f.key, f.avail, f.dir, Math.round(f.strength * 1000) / 1000]),
+    agg: { cpVolRatio: a.cpVolRatio, cpOIRatio: a.cpOIRatio, volOIRatio: a.volOIRatio, atmIV: a.atmIV, gex: a.gex, gammaFlip: a.gammaFlip, atmSpread: a.atmSpread, atmOI: a.atmOI },
+  };
+}

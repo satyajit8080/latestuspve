@@ -17,6 +17,7 @@ const { computeRow } = await import('../research/scan-universe.js');
 const J = (o) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => o });
 const calls = {};
 let flowCreatedAt = () => new Date().toISOString();
+let infoData = () => ({ next_earnings_date: '2099-01-01', sector: 'Technology' });
 const exp = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10).replace(/-/g, '').slice(2);
 const sym = (cp, k) => `AAPL${exp}${cp}${String(k * 1000).padStart(8, '0')}`;
 function route(s) {
@@ -33,6 +34,7 @@ function route(s) {
   if (s.includes('/greek-exposure/strike')) return J({ data: [{ strike: '200', call_gex: '5e8', put_gex: '-2e8', date: '2026-08-24' }, { strike: '210', call_gex: '1e8', put_gex: '-6e8', date: '2026-08-24' }] });
   if (s.includes('/greek-exposure')) return J({ data: [{ call_gamma: '3e8', put_gamma: '-1e8', date: '2026-08-24' }] });
   if (s.includes('/iv-rank')) return J({ data: [{ iv_rank_1y: '55', volatility: '0.4' }] });
+  if (s.includes('/info')) return J({ data: infoData() });
   if (s.includes('/ohlc/5m')) return J({ data: Array.from({ length: 12 }, (_, i) => ({ start_time: new Date(Date.UTC(2026, 7, 24, 13, 30 + i * 5)).toISOString(), open: 208, high: 211, low: 207, close: 209 + (i % 3), volume: 100000 })) });
   if (s.includes('/ohlc')) return J({ data: Array.from({ length: 20 }, (_, i) => ({ date: `2026-08-${String(i + 1).padStart(2, '0')}`, open: 200, high: 205 + i, low: 198 + i, close: 200 + i, volume: 1e6 })) });
   return J({ data: [] });
@@ -98,8 +100,8 @@ test('sideEffects:true records baselines, state and readiness for that ticker on
   assert.ok(ctx.baselines.stats().observations > 0);
   assert.ok(ctx.readiness.has('AAPL'));
   assert.equal(ctx.readiness.has('MSFT'), false);
-  // the fixture must be strong enough to be journaled, otherwise the read-only test below is vacuous
-  assert.ok(r.signal.finalScore >= 70, 'fixture score ' + r.signal.finalScore);
+  // every non-neutral signal is journaled (no 70+ write filter), so the read-only test below is not vacuous
+  assert.notEqual(r.signal.dir, 'neutral', 'fixture must be directional so the journal row is written');
   assert.ok(fs.readdirSync(process.env.SIGNAL_LOG_DIR).length > 0, 'side-effecting build must journal');
 });
 
@@ -119,6 +121,59 @@ test('v2 flow input is the CURRENT ET session only: yesterday\'s alerts do not c
   } finally { flowCreatedAt = () => new Date().toISOString(); }
   const fresh = await computeTickerSignal(P(), 'AAPL', mkCtx('new'), { sideEffects: false });
   assert.equal(fresh.v2.available, true);
+});
+
+test('earnings gate through the real provider shape: earnings today => published score 0, rawScore kept, journaled gated', async () => {
+  const { etDate } = await import('../lib/time.js');
+  infoData = () => ({ next_earnings_date: etDate(Date.now()), sector: 'Technology' });
+  try {
+    const r = await computeTickerSignal(P(), 'GOOG', mkCtx('earn'), {});
+    assert.equal(r.signal.gated, true); assert.equal(r.signal.finalScore, 0); assert.ok(r.signal.rawScore > 0);
+    const rows = fs.readdirSync(process.env.SIGNAL_LOG_DIR).filter((f) => f.startsWith('signal-log-')).flatMap((f) => fs.readFileSync(path.join(process.env.SIGNAL_LOG_DIR, f), 'utf8').split('\n').filter(Boolean).map(JSON.parse));
+    const row = rows.filter((x) => x.composite && x.composite.gated === true).pop();
+    assert.ok(row, 'a gated row is still journaled'); assert.equal(row.composite.finalScore, 0); assert.ok(row.composite.rawScore > 0); assert.ok(row.composite.gateReasons.includes('EARNINGS'));
+  } finally { infoData = () => ({ next_earnings_date: '2099-01-01', sector: 'Technology' }); }
+});
+
+test('journal row carries the frozen legacy score on the same inputs, and max pain only as display', async () => {
+  const ctx = mkCtx('legacy');
+  const r = await computeTickerSignal(P(), 'MSFT', ctx, {});
+  assert.ok(r.ok);
+  const rows = fs.readdirSync(process.env.SIGNAL_LOG_DIR).filter((f) => f.startsWith('signal-log-')).flatMap((f) => fs.readFileSync(path.join(process.env.SIGNAL_LOG_DIR, f), 'utf8').split('\n').filter(Boolean).map(JSON.parse));
+  const row = rows.filter((x) => x.ticker === 'MSFT').pop();
+  assert.ok(row && row.legacy, 'legacy block present');
+  assert.equal(row.legacy.version, 'opt-1.1.1'); assert.ok(Number.isFinite(row.legacy.finalScore));
+  assert.equal(row.composite.optionsEngineVersion, 'opt-1.2.0');
+  assert.equal('maxPain' in row.scored, false);                       // scored bucket never carries max pain
+  assert.ok('maxPain' in row.displayedNotScored);
+});
+
+test('with 10+ prior sessions of baseline, cpVolumeZ becomes available; with fewer it stays unavailable', async () => {
+  const young = mkCtx('young');
+  const a = await computeTickerSignal(P(), 'AAPL', young, { sideEffects: false });
+  assert.equal(a.signal.features.find((f) => f.key === 'cpVolumeZ').avail, 0);
+  const old = mkCtx('old');
+  // same ET wall-clock time on 12 earlier days (so DST changes cannot move the observations into another time bucket)
+  const { etMinutes } = await import('../lib/time.js');
+  const sameWallTime = (daysAgo) => { const base = Date.now(); const t = base - daysAgo * 86400000; let diff = etMinutes(base) - etMinutes(t); if (diff > 720) diff -= 1440; if (diff < -720) diff += 1440; return new Date(t + diff * 60000).toISOString(); };
+  for (let d = 1; d <= 12; d++) {
+    const at = sameWallTime(d);
+    await old.baselines.record('AAPL', 'cpVolumeLog', 0.8 + (d % 3) * 0.2, at);
+    await old.baselines.record('AAPL', 'signedPremium', 1e5 * (d % 4), at);
+    await old.baselines.record('AAPL', 'grossPremium', 1e6, at);
+    await old.baselines.record('AAPL', 'oiChangePct', 0.01 * (d % 3), at);
+  }
+  const b = await computeTickerSignal(P(), 'AAPL', old, { sideEffects: false });
+  const f = b.signal.features.find((x) => x.key === 'cpVolumeZ');
+  assert.equal(f.avail, 1); assert.match(f.note, /z=/);
+  assert.equal(b.signal.features.find((x) => x.key === 'signedPremium').note.includes('raw'), false);   // normalised, not raw
+});
+
+test('read-only builds never write baselines even when computing z-scores', async () => {
+  const ctx = mkCtx('ro2');
+  const before = ctx.baselines.stats().observations;
+  await computeTickerSignal(P(), 'AAPL', ctx, { sideEffects: false });
+  assert.equal(ctx.baselines.stats().observations, before);
 });
 
 test.after(() => { globalThis.fetch = real; });

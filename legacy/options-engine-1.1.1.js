@@ -13,7 +13,7 @@
  * OI change comes from UW's daily /oi-change (ctx.oiChange) and is `available:false` without it.
  */
 
-export const OPTIONS_ENGINE_VERSION = 'opt-1.1.1';   // 1.1.1: oiChange takes UW daily /oi-change directly (ctx.oiChange); no prev-poll reconstruction
+export const OPTIONS_ENGINE_VERSION = 'opt-1.1.1';   // FROZEN legacy copy (see legacy/README.md)
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));

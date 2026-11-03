@@ -91,16 +91,23 @@ export function explainSignal(rec) {
   const liq = f('liquidity');
   if (liq && isNum(liq.strength) && liq.strength < 0.3) risks.push('Options liquidity is thin — fills may slip versus the quoted price.');
 
+  const pg = rec.composite.priceGate || null;
+  const newEngine = !!pg || Array.isArray(rec.composite.gateReasons);
+  const gatesTxt = (rec.composite.gateReasons || []).length ? ` Gates/caps applied: ${rec.composite.gateReasons.join(', ')}.` : '';
   const summary = `${rec.ticker} scored ${rec.composite.finalScore} (${rec.composite.tier}) ${dir === 'bull' ? 'BULLISH → CALL' : 'BEARISH → PUT'}. `
-    + `Options score ${rec.composite.optionsScore} carried ${Math.round((0.6 / 0.85) * 100)}% of the weight; the stock component ${confirm === 1 ? 'confirmed' : confirm === -1 ? 'conflicted with' : 'was neutral to'} it. `
+    + (newEngine
+      ? `Directional evidence score ${rec.composite.optionsScore}; the price gate was ${pg ? pg.state : 'unavailable'}${pg && isNum(pg.vwapDistAtr) ? ` (${pg.vwapDistAtr} ATR from VWAP)` : ''}.${gatesTxt} `
+      : `Options score ${rec.composite.optionsScore} carried ${Math.round((0.6 / 0.85) * 100)}% of the weight; the stock component ${confirm === 1 ? 'confirmed' : confirm === -1 ? 'conflicted with' : 'was neutral toward'} it. `)
     + `${directional.filter((c) => c.agrees).length} of ${directional.length} available directional factors pointed ${dir}.`;
 
   return {
     schemaVersion: JOURNAL_SCHEMA_VERSION,
     summary,
-    whyScoreReached: `Final ${rec.composite.finalScore} = primary ${rec.composite.primary} × data-quality ${rec.composite.dataQuality}%. `
-      + `Primary blends options ${rec.composite.optionsScore} (weight .60) with stock ${stockScore} (weight .25, signed ${confirm === 1 ? '+1 agree' : confirm === -1 ? '-1 conflict' : '0 neutral'}). `
-      + `Journal alert threshold: ${JOURNAL_ALERT_MIN}+.`,
+    whyScoreReached: newEngine
+      ? `Final ${rec.composite.finalScore} = evidence score ${rec.composite.optionsScore} (100 x |net| x coverage over the available directional features)`
+        + `${pg && pg.multiplier !== 1 ? ` x price gate ${pg.multiplier}` : ''}${(rec.composite.gateReasons || []).length ? `, then capped/gated by ${rec.composite.gateReasons.join(', ')}` : ''}. Journal alert threshold: ${JOURNAL_ALERT_MIN}+.`
+      : `Final ${rec.composite.finalScore} = primary ${rec.composite.primary} × data-quality ${rec.composite.dataQuality}%. `
+        + `Primary blends options ${rec.composite.optionsScore} (weight .60) with stock ${stockScore} (weight .25, signed ${confirm === 1 ? '+1 agree' : confirm === -1 ? '-1 conflict' : '0 neutral'}). Journal alert threshold: ${JOURNAL_ALERT_MIN}+.`,
     strongestFactors: strongest,
     weakestFactors: weakest,
     conflictingFactors: conflicting,

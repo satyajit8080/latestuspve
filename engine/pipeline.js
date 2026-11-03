@@ -7,7 +7,8 @@
 //   The advisory AI uses sideEffects:false (or the cached last signal) so it can never perturb research data.
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildOptionsSignal } from '../public/options-engine.js';
+import { buildOptionsSignal, computeMaxPain, signedPremiumFromTrades, DEFAULT_OPTIONS_CFG } from './options-engine.js';
+import { buildOptionsSignal as buildLegacySignal } from '../legacy/options-engine-1.1.1.js';
 import { scoreV2, V2_VERSION } from './v2.js';
 import { signedFlow } from './features.js';
 import { step as stateStep, isActionable } from './state.js';
@@ -116,21 +117,58 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   const vwap = intraday && intraday.available && isNum(intraday.vwap) ? intraday.vwap : null;
   const bars = ohlc && ohlc.available && Array.isArray(ohlc.bars) ? ohlc.bars : [];
   const pc = g(chain, 'underlying', 'prevClose'), spot = g(chain, 'underlying', 'price');
+  const atr = atr14(bars);                                   // ATR(14) from daily bars: real value or null
   const ref = isNum(vwap) ? vwap : pc;                       // price vs VWAP intraday, previous close when closed
   const hist = (isNum(ref) && ref > 0) ? [ref, ref] : bars.slice(-2).map((b) => b.close).filter(isNum);
   const oc = oiChange && oiChange.available && isNum(oiChange.callOIChange) && isNum(oiChange.putOIChange)
     ? { callOIChange: oiChange.callOIChange, putOIChange: oiChange.putOIChange } : null;
 
-  const sig = buildOptionsSignal(chain, { underlyingHist: hist, flow: chain.flow, oiChange: oc }, {});
+  // ---- production inputs. Flow alerts are restricted to the CURRENT ET session up to now (an alert without a
+  // timestamp cannot be placed in a session and is excluded). Signed premium falls back to UW net-prem-ticks. ----
+  const nowMs = now.getTime(), today = etDate(nowMs);
+  const sessionTrades = (chain.flow && Array.isArray(chain.flow.largeTrades) ? chain.flow.largeTrades : []).filter((t) => isNum(t.ts) && t.ts <= nowMs + 60000 && etDate(t.ts) === today);
+  const spProbe = signedPremiumFromTrades(sessionTrades);
+  let netPrem = null;
+  if ((!spProbe || spProbe.gross < DEFAULT_OPTIONS_CFG.minPremium) && P.getNetPremium) {
+    const np = await safe(() => P.getNetPremium(ticker));
+    if (np && np.available && isNum(np.total_bullish_premium) && isNum(np.total_bearish_premium)) netPrem = { callNet: np.total_bullish_premium, putNet: np.total_bearish_premium };
+  }
+  let earn = null; try { earn = await ctx.earnings.daysAway(ticker); } catch { earn = null; }
+  const flowCtx = { trades: sessionTrades, netPrem };
+
+  // pass 1 (no baseline) yields the raw values; they are normalised against this ticker's OWN prior sessions
+  // (same ET time bucket, strictly earlier sessions); pass 2 scores with the normalised values.
+  const probe = buildOptionsSignal(chain, { flow: flowCtx, oiChange: oc, vwap, atr, now: nowMs, earningsDaysAway: earn }, {});
+  const fx = (k) => (probe.features.find((f) => f.key === k) || {});
+  const rawVals = {
+    signedPremium: isNum(fx('signedPremium').signedPremium) ? fx('signedPremium').signedPremium : null,
+    grossPremium: isNum(fx('signedPremium').grossPremium) ? fx('signedPremium').grossPremium : null,
+    oiChangePct: fx('oiChange').avail ? fx('oiChange').value : null,
+    cpVolumeLog: probe.agg.totVol >= DEFAULT_OPTIONS_CFG.minChainContracts ? probe.agg.cpVolLog : null,
+  };
+  const norm = {};
+  const nz = (feature, value) => (isNum(value) ? ctx.baselines.normalize(ticker, feature, value, nowIso) : null);
+  norm.signedPremium = nz('signedPremium', rawVals.signedPremium);
+  norm.grossPremium = nz('grossPremium', rawVals.grossPremium);
+  norm.oiChange = nz('oiChangePct', rawVals.oiChangePct);
+  norm.cpVolumeLog = nz('cpVolumeLog', rawVals.cpVolumeLog);
+  const sig = buildOptionsSignal(chain, { flow: flowCtx, oiChange: oc, norm, vwap, atr, now: nowMs, earningsDaysAway: earn }, {});
+  sig.v2Inputs = { sessionTrades: sessionTrades.length };
+  if (sideEffects) for (const [f, v] of Object.entries(rawVals)) { try { await ctx.baselines.record(ticker, f, v, nowIso); } catch { /* non-fatal */ } }
+  // frozen legacy engine (opt-1.1.1) on the SAME inputs, journaled so the new engine can be compared on identical observations
+  let legacy = null;
+  try { const l = buildLegacySignal(chain, { underlyingHist: hist, flow: chain.flow, oiChange: oc }, {}); legacy = { version: l.optionsEngineVersion, finalScore: l.finalScore, dir: l.dir, tier: l.tier }; } catch { legacy = null; }
   // SIGNAL JOURNAL bucket (A): aggregates the SCORE used, captured BEFORE the display overrides below.
   const a0 = sig.agg || {};
-  const scoredAgg = { gex: a0.gex, gammaFlip: a0.gammaFlip, maxPain: a0.maxPain, cpVolRatio: a0.cpVolRatio, cpOIRatio: a0.cpOIRatio, volOIRatio: a0.volOIRatio, atmIV: a0.atmIV, strikeConcentration: a0.strikeConcentration, avgSpread: a0.avgSpread, spot: a0.spot };
+  const scoredAgg = { gex: a0.gex, gammaFlip: a0.gammaFlip, cpVolRatio: a0.cpVolRatio, cpOIRatio: a0.cpOIRatio, volOIRatio: a0.volOIRatio, atmIV: a0.atmIV, strikeConcentration: a0.strikeConcentration, avgSpread: a0.avgSpread, spot: a0.spot };
   // Display/context overrides (bucket B) — do not change the score.
   if (gex && gex.available) { if (isNum(gex.net_gex)) sig.agg.gex = gex.net_gex; sig.gexSource = 'uw'; }
   const lv = levelsFromByStrike(byStrike, spot);
   if (lv) { sig.agg.gammaFlip = lv.gammaFlip; sig.walls = { call: lv.call, put: lv.put }; }
   else if (gex && gex.available) { if (isNum(gex.gamma_flip)) sig.agg.gammaFlip = gex.gamma_flip; sig.walls = { call: gex.call_wall ?? null, put: gex.put_wall ?? null }; }
   if (ivRank && ivRank.available) { sig.ivRank = ivRank.iv_rank; sig.ivPercentile = ivRank.iv_percentile; }
+  // max pain: DISPLAY ONLY (not in the scoring path). UW /max-pain cached per ET day; chain-derived fallback.
+  { const mp = P.getMaxPain ? await d('maxpain', () => P.getMaxPain(ticker)) : null; sig.agg.maxPain = mp && mp.available && isNum(mp.maxPain) ? mp.maxPain : computeMaxPain(chain); }
 
   // Entry option price: ATM contract on the signal's side, captured now (never back-filled).
   let entryOption = null;
@@ -145,15 +183,12 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   }
   const vsVwapPct = (isNum(vwap) && isNum(spot) && vwap > 0) ? r2(((spot - vwap) / vwap) * 100) : null;
   const changePct = (isNum(spot) && isNum(pc) && pc > 0) ? r2(((spot - pc) / pc) * 100) : null;
-  const atr = atr14(bars);
 
   // ---------------- v2 SHADOW (never affects the production score) ----------------
+  let rvolVal = null, mktRegime = null;                                   // context recorded in the journal row
   let v2 = null, v2state = null; const readiness = { rvol: null, ivSkew: null, sector: null, at: nowIso };
   try {
-    // v2 flow input = alerts from the CURRENT ET session up to now. "The last N alerts" mixes days and is not stationary;
-    // an alert without a timestamp cannot be placed in a session and is excluded.
-    const today = etDate(now.getTime());
-    const trades = (chain.flow && Array.isArray(chain.flow.largeTrades) ? chain.flow.largeTrades : []).filter((t) => isNum(t.ts) && t.ts <= now.getTime() + 60000 && etDate(t.ts) === today);
+    const trades = sessionTrades;   // same current-session alerts the production engine used
     const rawFlow = trades.length ? signedFlow(trades, { spot }) : null;
     let normalized = {};
     if (rawFlow && rawFlow.available) {
@@ -162,17 +197,18 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
       else for (const [f, v] of Object.entries(bag)) normalized[f] = ctx.baselines.normalize(ticker, f, v, nowIso);   // read-only
     }
     const flags = eventFlags(now);
-    let rvol = { available: false, rvol: null }, mkt = { spyTrend: null, qqqTrend: null }, ivc = { available: false }, earn = null;
+    let rvol = { available: false, rvol: null }, mkt = { spyTrend: null, qqqTrend: null }, ivc = { available: false };
     try { if (intraday) rvol = await computeRvol({ baselines: ctx.baselines, ticker, intraday, at: nowIso, record: sideEffects }); } catch { /* optional */ }
     try { mkt = await ctx.marketCtx.get(); } catch { /* optional */ }
     try { ivc = sideEffects ? ctx.ivSkew.update(ticker, chain.contracts, spot) : ctx.ivSkew.peek(ticker, chain.contracts, spot); } catch { /* optional */ }
-    try { earn = await ctx.earnings.daysAway(ticker); } catch { earn = null; }
     let sector = { state: 'UNAVAILABLE' };
     try {
       if (Date.now() - ctx.sectorTide.at > 5 * 60000 && P.getSectorTide) { ctx.sectorTide.data = await P.getSectorTide(); ctx.sectorTide.at = Date.now(); }
       let secName = null; try { const comp = await P.getCompanies([ticker]); secName = comp && comp[ticker] ? comp[ticker].sector : null; } catch { secName = null; }
       sector = sectorRelativeStrength({ ticker, sector: secName, sectorTide: ctx.sectorTide.data, marketTide: null });
     } catch { sector = { state: 'UNAVAILABLE', reason: 'SECTOR_LOOKUP_FAILED' }; }
+    rvolVal = rvol.available && isNum(rvol.rvol) ? rvol.rvol : null;
+    mktRegime = mkt && mkt.available ? (mkt.spyTrend === 'up' && mkt.qqqTrend !== 'down' ? 'bullish' : mkt.spyTrend === 'down' && mkt.qqqTrend !== 'up' ? 'bearish' : 'mixed') : null;
     readiness.rvol = rvolReadiness({ baselines: ctx.baselines, ticker, bucket: flags.timeBucket, rvolResult: rvol });
     readiness.ivSkew = ivSkewReadiness(ivc); readiness.sector = sector;
 
@@ -203,7 +239,7 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   if (sideEffects) {
     ctx.readiness.set(ticker, readiness);
     try {
-      await logSignal({ ticker, sig, scoredAgg, underlying: chain.underlying || null, prevHadSnapshot: !!oc, now, entryOption, vsVwapPct, changePct, atr, vwap,
+      await logSignal({ ticker, sig, scoredAgg, legacy, underlying: chain.underlying || null, prevHadSnapshot: !!oc, now, entryOption, vsVwapPct, changePct, atr, vwap, rvol: rvolVal, marketRegime: mktRegime, earningsWithin2Days: isNum(earn) ? (earn >= 0 && earn <= 2) : null,
         v2: v2 && v2.available ? { version: V2_VERSION, score: v2.score, dir: v2.dir, coverage: v2.coverage, components: v2.components, reasons: v2.reasons, quality: v2.quality, gated: v2.gated } : null,
  });
     } catch { /* journaling must never break a build */ }

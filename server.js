@@ -1,6 +1,6 @@
 // US options signal engine — server.
 // Unusual Whales is the only data source. One pipeline (engine/pipeline.js) builds the production signal
-// (public/options-engine.js) and the v2 shadow challenger (engine/v2.js) for both these routes and the scan.
+// (engine/options-engine.js) and the v2 shadow challenger (engine/v2.js) for both these routes and the scan.
 // Secrets stay server-side. AI is explain-only.
 
 import express from 'express';
@@ -23,7 +23,7 @@ import { createPipelineContext, computeTickerSignal } from './engine/pipeline.js
 import { V2_VERSION } from './engine/v2.js';
 import { BaselineStore } from './store/normalize.js';
 import { macroReadiness, researchReadiness, RateLimiter } from './store/readiness.js';
-import { OPTIONS_ENGINE_VERSION } from './public/options-engine.js';
+import { OPTIONS_ENGINE_VERSION } from './engine/options-engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -276,7 +276,7 @@ app.get('/api/journal/evaluation', requireAuth, (req, res) => {
 app.get('/api/journal/resolve/status', requireAuth, (req, res) => res.json({ ok: true, ...RESOLVE_STATE }));
 // compact, safe view of the deterministic signal for the AI response (authority fields intact)
 function publicSignal(sig) {
-  return { ticker: sig.ticker, finalScore: sig.finalScore, dir: sig.dir, tier: sig.tier, optionsScore: sig.optionsScore, stockScore: sig.stockScore, dataQualityStatus: sig.dataQualityStatus, dataQuality: sig.dataQuality, gexSource: sig.gexSource, ivRank: sig.ivRank, walls: sig.walls, agg: sig.agg ? { gex: sig.agg.gex, gammaFlip: sig.agg.gammaFlip, maxPain: sig.agg.maxPain } : null };
+  return { ticker: sig.ticker, finalScore: sig.finalScore, dir: sig.dir, tier: sig.tier, optionsScore: sig.optionsScore, rawScore: sig.rawScore, gated: sig.gated, actionable: sig.actionable, gateReasons: sig.gateReasons, priceGate: sig.priceGate, dataQualityStatus: sig.dataQualityStatus, dataQuality: sig.dataQuality, gexSource: sig.gexSource, ivRank: sig.ivRank, walls: sig.walls, agg: sig.agg ? { gex: sig.agg.gex, gammaFlip: sig.agg.gammaFlip, maxPain: sig.agg.maxPain } : null };
 }
 
 app.get('/api/_monitor', requireAuth, (req, res) => res.json({

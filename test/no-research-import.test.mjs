@@ -9,7 +9,7 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const importsOf = (src) => [...src.matchAll(/import\s+[^'"]*from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
 
 test('J: production files do NOT import from research/ (offline ML/validation stays offline)', () => {
-  for (const f of ['server.js', 'validated/promotion.js', 'store/signal-log.js', 'store/journal.js', 'store/journal-store.js', 'engine/pipeline.js', 'public/options-engine.js', 'providers/unusualwhales.js', 'providers/options.js', 'ai/agents.js', 'ticker.js']) {
+  for (const f of ['server.js', 'validated/promotion.js', 'store/signal-log.js', 'store/journal.js', 'store/journal-store.js', 'engine/pipeline.js', 'engine/options-engine.js', 'providers/unusualwhales.js', 'providers/options.js', 'ai/agents.js', 'ticker.js']) {
     const imps = importsOf(read(f));
     for (const i of imps) assert.ok(!/(^|\/)research\//.test(i) && !i.includes('/research/'), `${f} must not import research code (found ${i})`);
   }

@@ -227,6 +227,6 @@ test('public/ has no scoring math: the browser never imports an engine or recomp
   assert.equal(fs.existsSync(path.join(ROOT, 'public', 'overview-sim.js')), false);
   assert.equal(fs.existsSync(path.join(ROOT, 'public', 'engine.js')), false);
   const files = fs.readdirSync(path.join(ROOT, 'public')).sort();
-  assert.deepEqual(files, ['app.js', 'index.html', 'options-engine.js']);   // options-engine.js is server-imported; the page does not load it
-  assert.ok(!fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8').includes('options-engine'));
+  assert.deepEqual(files, ['app.js', 'index.html']);   // scoring lives in engine/, never under public/
+  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'options-engine.js')), false);
 });

@@ -25,10 +25,11 @@ function marketBias(score, dir) {
   if (score >= 35) return 'WEAK';
   return 'AVOID';
 }
-function signalFrom(score, dir) {
-  if (!isNum(score)) return 'DATA UNAVAILABLE';
-  if (score < 65) return 'WATCH';
-  return dir === 'bull' ? 'CALL' : dir === 'bear' ? 'PUT' : 'WATCH';
+// CALL/PUT labels need an ACTIONABLE signal (price gate, liquidity, RTH, earnings, >=2 directional features) and score >= 65.
+export function signalFrom(sig) {
+  if (!sig || !isNum(sig.finalScore)) return 'DATA UNAVAILABLE';
+  if (!sig.actionable || sig.finalScore < 65) return 'WATCH';
+  return sig.dir === 'bull' ? 'CALL' : sig.dir === 'bear' ? 'PUT' : 'WATCH';
 }
 function liquidityBucket(chain) {
   const rows = (chain && chain.contracts) || [];
@@ -56,7 +57,7 @@ export async function computeRow(P, ticker, opt) {
   const oiChange = extras.oiChange;
   return {
     ticker, sector: sectorMap[ticker] || null,
-    productionScore, signal: signalFrom(productionScore, dir), marketBias: marketBias(productionScore, dir), dir,
+    productionScore, signal: signalFrom(sig), marketBias: marketBias(productionScore, dir), dir,
     confidence: g(sig, 'dataQuality'),                  // data/conviction (0-100) — NOT a probability of profit
     price, changePct: extras.changePct, volume: g(chain, 'underlying', 'volume'),
     oiChangeNet: (oiChange && oiChange.available) ? oiChange.netOIChange : null,

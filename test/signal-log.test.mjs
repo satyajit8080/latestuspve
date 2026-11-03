@@ -13,16 +13,17 @@ const readAll = () => fs.readdirSync(DIR).filter((f) => f.endsWith('.jsonl')).fl
 // a representative production signal object (as buildOptionsSignal returns), with agg already
 // carrying the PVE display override (gex = pve value); scoredAgg carries the chain-computed value.
 const makeSig = (over = {}) => ({
-  finalScore: 72, dir: 'bull', tier: 'Moderate', primary: 75, optionsScore: 80, stockScore: 40,
-  predictionMarketScore: null, pveState: 'none', pveFactor: 1.0, dataQuality: 100, gexSource: 'uw',
+  finalScore: 72, rawScore: 72, gated: false, dir: 'bull', tier: 'Strong', primary: 75, optionsScore: 75, stockConfirm: 1,
+  priceGate: { state: 'confirms', vwapDistAtr: 0.9, multiplier: 1 }, gateReasons: [], flags: [], actionable: true, tradeable: true, coverage: 1, availableDirectional: 3,
+  dataQuality: 100, gexSource: 'uw',
   ivRank: 55, ivPercentile: 60, walls: { call: 200, put: 180 },
   agg: { gex: 1_536_000_000, gammaFlip: 190, maxPain: 195 },      // (B) PVE-overridden display values
   features: [
-    { key: 'cpVolume', avail: 1, dir: 1, strength: 0.6, value: 1.8 },
-    { key: 'gexContext', avail: 1, dir: 0, strength: 0.4, value: 4_920_000 },
+    { key: 'signedPremium', avail: 1, dir: 1, strength: 0.6, value: 0.4 },
+    { key: 'cpVolumeZ', avail: 1, dir: -1, strength: 0.4, value: -1.2 },
     { key: 'oiChange', avail: 0, dir: 0, strength: 0, value: null },
   ],
-  optionsEngineVersion: 'opt-1.0.0', ...over,
+  optionsEngineVersion: 'opt-1.2.0', ...over,
 });
 const scoredAgg = { gex: 4_920_000, gammaFlip: 188, maxPain: 195, cpVolRatio: 1.8, cpOIRatio: 1.5, volOIRatio: 2.1, atmIV: 0.4, strikeConcentration: 0.12, avgSpread: 0.02, spot: 191.2 };
 const underlying = { price: 191.2, prevClose: 188.0, volume: 5e6, available: true };
@@ -35,8 +36,10 @@ test('separates A (scored) / B (displayed-not-scored) with no ambiguous field', 
   // (A) scored: chain-computed GEX is what the score used
   assert.equal(r.scored.gexChainComputed, 4_920_000);
   assert.equal(r.scored.oiChangeAvailable, false);           // cold start recorded honestly
-  assert.ok(r.scored.components.find((c) => c.key === 'cpVolume').scored === true);
-  assert.deepEqual(r.scored.activeComponents, ['cpVolume']); // directional + aligned with bull
+  assert.ok(r.scored.components.find((c) => c.key === 'signedPremium').scored === true);
+  assert.deepEqual(r.scored.activeComponents, ['signedPremium']); // directional + aligned with bull (cpVolumeZ opposes)
+  assert.equal(r.composite.gated, false); assert.equal(r.composite.rawScore, 72); assert.deepEqual(r.composite.priceGate, { state: 'confirms', vwapDistAtr: 0.9, multiplier: 1 });
+  assert.equal('stockScore' in r.composite, false);
   // (B) displayed-not-scored: the UW GEX override is a SEPARATE field, not merged with the scored value
   assert.equal(r.displayedNotScored.gexOverride, 1_536_000_000);
   assert.equal(r.displayedNotScored.gexSource, 'uw');

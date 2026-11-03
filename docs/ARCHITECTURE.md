@@ -7,7 +7,7 @@ Unusual Whales REST
       │  providers/unusualwhales.js   rate-limited, retries inside the dedupe, null on any failure
       ▼
 engine/pipeline.js  computeTickerSignal(provider, ticker, ctx, { sideEffects })
-      │   ├─ production score  public/options-engine.js   (the published score)
+      │   ├─ production score  engine/options-engine.js   (the published score)
       │   ├─ v2 shadow score   engine/v2.js + features.js  (challenger)
       │   ├─ state machine     engine/state.js
       │   └─ journal row       store/signal-log.js        (only when sideEffects !== false)
@@ -21,7 +21,7 @@ Concurrent builds for the same ticker are coalesced.
 
 ## Engines
 
-- **Production (`public/options-engine.js`, version in `OPTIONS_ENGINE_VERSION`)** – the published score.
+- **Production (`engine/options-engine.js`, version in `OPTIONS_ENGINE_VERSION`)** – the published score.
 - **v2 shadow (`engine/v2.js`)** – aggressor-signed, delta-weighted flow normalised per ticker against its own same-time-of-day history; gamma, VWAP, RVOL, market and event context act as gates and multipliers.
 - **Promotion** – `validated/promotion.json` is the single switch: `{ primary: "opt" | "v2", approvedBy, approvedAt, evidence }`. Default `"opt"`. `v2` only takes effect if all three approval fields are present. `store/readiness.js promotionGate` only reports eligibility. Nothing in the repo writes the file.
 

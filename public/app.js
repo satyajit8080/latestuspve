@@ -89,7 +89,8 @@ async function renderOptions() {
       <div class="score" style="margin-left:auto;text-align:right"><div class="n ${dcl}" style="font-size:30px">${finalScore}</div><div class="l">${esc(tier)} · FINAL</div><div class="l dim" style="font-size:9px;letter-spacing:.06em">LIVE · RECOMPUTED NOW</div></div>
     </div>
     <div class="dl" style="margin-top:14px">
-      ${kv('Options score', `<b>${sig.optionsScore}</b>`)} ${kv('Stock score', `<b>${sig.stockScore}</b>`)}
+      ${kv('Evidence score', `<b>${sig.optionsScore}</b> <span class="dim">(pre-gate)</span>`)} ${kv('Price vs VWAP', sig.priceGate && isNum(sig.priceGate.vwapDistAtr) ? `<span class="${sig.priceGate.state === 'conflict' ? 'bear' : sig.priceGate.state === 'confirms' ? 'bull' : 'dim'}">${sig.priceGate.vwapDistAtr >= 0 ? '+' : ''}${sig.priceGate.vwapDistAtr} ATR · ${esc(sig.priceGate.state)}</span>` : '<span class="dim">unavailable</span>')}
+      ${kv('Gates / caps', (sig.gateReasons && sig.gateReasons.length) ? sig.gateReasons.map((g) => `<span class="bear">${esc(g)}</span>`).join(' ') : '<span class="dim">none</span>')} ${kv('Actionable', sig.actionable ? '<b class="bull">yes</b>' : '<span class="dim">no</span>')}
       ${kv('Primary engine', esc(sig.primaryEngine || 'opt'))} ${kv('Data quality', pct(sig.dataQuality / 100, 0))}
       ${kv('Call/Put vol', isNum(a.cpVolRatio) ? a.cpVolRatio.toFixed(2) : (a.cpVolRatio === Infinity ? '∞' : '—'))} ${kv('Vol/OI', isNum(a.volOIRatio) ? a.volOIRatio.toFixed(2) : '—')}
       ${kv('ATM IV', isNum(a.atmIV) ? (a.atmIV * 100).toFixed(0) + '%' : '—')} ${kv('GEX', gexTxt)}
@@ -184,7 +185,7 @@ async function renderJrDash() {
       ${card('TOTAL SIGNALS', T.signals)}${card('WINNERS', T.winners, 'bull')}${card('LOSERS', T.losers, 'bear')}
       ${card('WIN RATE', isNum(L.winRate) ? L.winRate + '%' : '—')}
       ${card('AVG 30M', isNum(L.avg30mReturn) ? L.avg30mReturn + '%' : '—', L.avg30mReturn >= 0 ? 'bull' : 'bear')}
-      ${card('AVG 1H', isNum(L.avg1hReturn) ? L.avg1hReturn + '%' : '—', L.avg1hReturn >= 0 ? 'bull' : 'bear')}
+      ${card('AVG RETURN', isNum(L.avgReturn) ? L.avgReturn + '%' : '—', L.avgReturn >= 0 ? 'bull' : 'bear')}
       ${card('BEST FACTOR', L.bestFactor ? esc(L.bestFactor.label) : '—')}${card('WORST FACTOR', L.worstFactor ? esc(L.worstFactor.label) : '—')}</div>
     ${T.resolved === 0 ? '<div class="dim" style="padding:10px;border:1px solid var(--line);border-radius:8px">No resolved outcomes yet. Signals resolve 30 minutes after they fire — press <b>Resolve Outcomes</b> once some have aged.</div>' : ''}
     <div class="dim mono" style="font-size:11px;margin-top:8px">${esc(L.note)}</div>`;

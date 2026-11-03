@@ -1,0 +1,425 @@
+{
+  "bull": {
+    "finalScore": 75,
+    "rawScore": 75,
+    "gated": false,
+    "dir": "bull",
+    "tier": "Strong",
+    "optionsScore": 75,
+    "actionable": true,
+    "tradeable": true,
+    "stockConfirm": 1,
+    "priceGate": {
+      "state": "confirms",
+      "vwapDistAtr": 0.75,
+      "multiplier": 1
+    },
+    "gateReasons": [],
+    "flags": [],
+    "availableDirectional": 3,
+    "coverage": 1,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        1,
+        0.731
+      ],
+      [
+        "oiChange",
+        1,
+        1,
+        0.764
+      ],
+      [
+        "cpVolumeZ",
+        1,
+        1,
+        0.768
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 4.4186046511627906,
+      "cpOIRatio": 2.8358208955223883,
+      "volOIRatio": 0.9066147859922179,
+      "atmIV": 0.42,
+      "gex": 4920000,
+      "gammaFlip": 95,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11000
+    }
+  },
+  "bull_price_conflict": {
+    "finalScore": 56,
+    "rawScore": 56,
+    "gated": false,
+    "dir": "bull",
+    "tier": "Weak",
+    "optionsScore": 75,
+    "actionable": false,
+    "tradeable": true,
+    "stockConfirm": -1,
+    "priceGate": {
+      "state": "conflict",
+      "vwapDistAtr": -1.75,
+      "multiplier": 0.75
+    },
+    "gateReasons": [
+      "PRICE_CONFLICT"
+    ],
+    "flags": [],
+    "availableDirectional": 3,
+    "coverage": 1,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        1,
+        0.731
+      ],
+      [
+        "oiChange",
+        1,
+        1,
+        0.764
+      ],
+      [
+        "cpVolumeZ",
+        1,
+        1,
+        0.768
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 4.4186046511627906,
+      "cpOIRatio": 2.8358208955223883,
+      "volOIRatio": 0.9066147859922179,
+      "atmIV": 0.42,
+      "gex": 4920000,
+      "gammaFlip": 95,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11000
+    }
+  },
+  "bear": {
+    "finalScore": 75,
+    "rawScore": 75,
+    "gated": false,
+    "dir": "bear",
+    "tier": "Strong",
+    "optionsScore": 75,
+    "actionable": true,
+    "tradeable": true,
+    "stockConfirm": 1,
+    "priceGate": {
+      "state": "confirms",
+      "vwapDistAtr": -0.75,
+      "multiplier": 1
+    },
+    "gateReasons": [],
+    "flags": [],
+    "availableDirectional": 3,
+    "coverage": 1,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        -1,
+        0.731
+      ],
+      [
+        "oiChange",
+        1,
+        -1,
+        0.764
+      ],
+      [
+        "cpVolumeZ",
+        1,
+        -1,
+        0.769
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 0.15121951219512195,
+      "cpOIRatio": 0.24390243902439024,
+      "volOIRatio": 0.9254901960784314,
+      "atmIV": 0.41750000000000004,
+      "gex": -6200000,
+      "gammaFlip": null,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11500
+    }
+  },
+  "neutral": {
+    "finalScore": 0,
+    "rawScore": 0,
+    "gated": false,
+    "dir": "neutral",
+    "tier": "Weak",
+    "optionsScore": 0,
+    "actionable": false,
+    "tradeable": true,
+    "stockConfirm": 0,
+    "priceGate": {
+      "state": "neutral",
+      "vwapDistAtr": 0,
+      "multiplier": 1
+    },
+    "gateReasons": [
+      "INSUFFICIENT_DIRECTIONAL_EVIDENCE"
+    ],
+    "flags": [],
+    "availableDirectional": 0,
+    "coverage": 0,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        0,
+        0,
+        0
+      ],
+      [
+        "oiChange",
+        0,
+        0,
+        0
+      ],
+      [
+        "cpVolumeZ",
+        0,
+        0,
+        0
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 1,
+      "cpOIRatio": 1,
+      "volOIRatio": 0.75,
+      "atmIV": 0.41,
+      "gex": 0,
+      "gammaFlip": 105,
+      "atmSpread": 0.050031269543464714,
+      "atmOI": 8000
+    }
+  },
+  "sparse": {
+    "finalScore": 0,
+    "rawScore": 0,
+    "gated": false,
+    "dir": "neutral",
+    "tier": "Weak",
+    "optionsScore": 0,
+    "actionable": false,
+    "tradeable": true,
+    "stockConfirm": 0,
+    "priceGate": {
+      "state": "unavailable",
+      "vwapDistAtr": null,
+      "multiplier": 1
+    },
+    "gateReasons": [
+      "INSUFFICIENT_DIRECTIONAL_EVIDENCE"
+    ],
+    "flags": [
+      "PRICE_GATE_UNAVAILABLE",
+      "EARNINGS_UNKNOWN"
+    ],
+    "availableDirectional": 0,
+    "coverage": 0,
+    "dataQuality": 50,
+    "features": [
+      [
+        "signedPremium",
+        0,
+        0,
+        0
+      ],
+      [
+        "oiChange",
+        0,
+        0,
+        0
+      ],
+      [
+        "cpVolumeZ",
+        0,
+        0,
+        0
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 0.8333333333333334,
+      "cpOIRatio": 1.1111111111111112,
+      "volOIRatio": 0.5789473684210527,
+      "atmIV": null,
+      "gex": null,
+      "gammaFlip": null,
+      "atmSpread": null,
+      "atmOI": 3800
+    }
+  },
+  "bull_earnings_gated": {
+    "finalScore": 0,
+    "rawScore": 75,
+    "gated": true,
+    "dir": "bull",
+    "tier": "Weak",
+    "optionsScore": 75,
+    "actionable": false,
+    "tradeable": true,
+    "stockConfirm": 1,
+    "priceGate": {
+      "state": "confirms",
+      "vwapDistAtr": 0.75,
+      "multiplier": 1
+    },
+    "gateReasons": [
+      "EARNINGS"
+    ],
+    "flags": [],
+    "availableDirectional": 3,
+    "coverage": 1,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        1,
+        0.731
+      ],
+      [
+        "oiChange",
+        1,
+        1,
+        0.764
+      ],
+      [
+        "cpVolumeZ",
+        1,
+        1,
+        0.768
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 4.4186046511627906,
+      "cpOIRatio": 2.8358208955223883,
+      "volOIRatio": 0.9066147859922179,
+      "atmIV": 0.42,
+      "gex": 4920000,
+      "gammaFlip": 95,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11000
+    }
+  },
+  "bull_after_hours": {
+    "finalScore": 60,
+    "rawScore": 60,
+    "gated": false,
+    "dir": "bull",
+    "tier": "Moderate",
+    "optionsScore": 75,
+    "actionable": false,
+    "tradeable": true,
+    "stockConfirm": 1,
+    "priceGate": {
+      "state": "confirms",
+      "vwapDistAtr": 0.75,
+      "multiplier": 1
+    },
+    "gateReasons": [
+      "OUTSIDE_RTH"
+    ],
+    "flags": [
+      "OUTSIDE_RTH"
+    ],
+    "availableDirectional": 3,
+    "coverage": 1,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        1,
+        0.731
+      ],
+      [
+        "oiChange",
+        1,
+        1,
+        0.764
+      ],
+      [
+        "cpVolumeZ",
+        1,
+        1,
+        0.768
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 4.4186046511627906,
+      "cpOIRatio": 2.8358208955223883,
+      "volOIRatio": 0.9066147859922179,
+      "atmIV": 0.42,
+      "gex": 4920000,
+      "gammaFlip": 95,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11000
+    }
+  },
+  "bull_cold_start": {
+    "finalScore": 71,
+    "rawScore": 71,
+    "gated": false,
+    "dir": "bull",
+    "tier": "Strong",
+    "optionsScore": 71,
+    "actionable": true,
+    "tradeable": true,
+    "stockConfirm": 1,
+    "priceGate": {
+      "state": "confirms",
+      "vwapDistAtr": 0.75,
+      "multiplier": 1
+    },
+    "gateReasons": [],
+    "flags": [],
+    "availableDirectional": 2,
+    "coverage": 0.75,
+    "dataQuality": 100,
+    "features": [
+      [
+        "signedPremium",
+        1,
+        1,
+        0.95
+      ],
+      [
+        "oiChange",
+        1,
+        1,
+        0.955
+      ],
+      [
+        "cpVolumeZ",
+        0,
+        0,
+        0
+      ]
+    ],
+    "agg": {
+      "cpVolRatio": 4.4186046511627906,
+      "cpOIRatio": 2.8358208955223883,
+      "volOIRatio": 0.9066147859922179,
+      "atmIV": 0.42,
+      "gex": 4920000,
+      "gammaFlip": 95,
+      "atmSpread": 0.05141727092946604,
+      "atmOI": 11000
+    }
+  }
+}

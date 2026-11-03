@@ -33,6 +33,7 @@ export function buildAiContext(signal, extras = {}) {
     options: {
       optionsScore: isNum(s.optionsScore) ? s.optionsScore : null,
       stockScore: isNum(s.stockScore) ? s.stockScore : null,
+      gateReasons: Array.isArray(s.gateReasons) ? s.gateReasons : [], priceGate: s.priceGate || null, actionable: s.actionable ?? null,
       callPutVolRatio: isNum(a.cpVolRatio) ? a.cpVolRatio : null,
       callPutOIRatio: isNum(a.cpOIRatio) ? a.cpOIRatio : null,
       atmIV: isNum(a.atmIV) ? a.atmIV : null,
