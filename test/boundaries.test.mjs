@@ -22,11 +22,12 @@ test('BOUNDARY: missing greeks/iv/quotes → unavailable (GEX/IV/spread null, no
   assert.equal(sig.dataAvailability.sweeps, undefined === sig.dataAvailability.sweeps ? sig.dataAvailability.sweeps : false); // never true
 });
 
-// ---- 5. PVE_AGENT_KEY / secrets never in browser code ----
-test('BOUNDARY: browser assets never reference the agent key/header or process.env', () => {
+// ---- 5. secrets never in browser code ----
+test('BOUNDARY: browser assets never reference secrets or process.env', () => {
   const pub = path.join(import.meta.dirname, '..', 'public');
-  for (const f of ['app.js', 'index.html']) {
-    const src = fs.readFileSync(path.join(pub, f), 'utf8');
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+  for (const f of walk(pub).filter((x) => /\.(js|html|css|json)$/.test(x))) {
+    const src = fs.readFileSync(f, 'utf8');
     assert.equal(/X-Agent-Key/i.test(src), false, `${f} must not use X-Agent-Key`);
     assert.equal(/process\.env/.test(src), false, `${f} must not read process.env`);
     assert.equal(/ghp_[A-Za-z0-9]{20}/.test(src), false, `${f} must not contain a token`);

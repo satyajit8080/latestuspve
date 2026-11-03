@@ -85,7 +85,7 @@ app.post('/auth/login', (req, res) => {
   res.json({ ok: true });
 });
 app.post('/auth/logout', (req, res) => { res.setHeader('Set-Cookie', 'sess=; HttpOnly; Path=/; Max-Age=0' + COOKIE_SECURE); res.json({ ok: true }); });
-app.get('/auth/status', (req, res) => res.json({ authed: authed(req), options: optionsProviderStatus(process.env) }));
+app.get('/auth/status', (req, res) => res.json({ authed: authed(req), options: optionsProviderStatus(process.env), ai: { enabled: AI.cfg.enabled && AI.client.available }, versions: { optionsEngine: OPTIONS_ENGINE_VERSION, v2: V2_VERSION }, primary: PROMOTION.primary }));
 
 // ---- REAL options + stock (PRIMARY). Provider selected via env; key stays server-side. ----
 const UW_LIMITER = new RateLimiter({ maxPerMinute: Number(process.env.UW_MAX_PER_MINUTE) || null, maxPerScan: Number(process.env.UW_MAX_PER_SCAN) || 12000 });   // 500 tickers x ~14 calls + headroom
@@ -130,6 +130,36 @@ app.get('/api/options/:ticker', requireAuth, async (req, res) => {
   } catch (e) {
     res.json({ ok: false, provider: OPT_PROVIDER.name, error: e.message, normalized: null }); // 403/paywall surfaces here; no fabrication
   }
+});
+
+
+// ---- Ticker tear sheet data. GET is CACHE-ONLY (zero UW calls). POST .../refresh is an explicit live recompute that is
+// side-effect-free (no journal row, no baseline, no state) and is refused while a scan runs or the limiter is saturated.
+function tickerPayload(ticker, signal, chain, at, spark, source) {
+  const contracts = ((chain && chain.contracts) || []).slice().sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 80);
+  const flow = chain && chain.flow && chain.flow.available ? chain.flow.largeTrades.slice(0, 40) : [];
+  return { ok: true, source, ticker, at, ageMs: Date.now() - at, signal, spark: spark || [], chain: { underlying: chain && chain.underlying, fieldsAvailable: chain && chain.fieldsAvailable, contracts, flow } };
+}
+app.get('/api/ticker/:ticker', requireAuth, (req, res) => {
+  const ticker = safeTicker(req.params.ticker);
+  if (!ticker) return res.status(400).json({ ok: false, error: 'Invalid ticker' });
+  const hit = PIPE.lastSignals.get(ticker);
+  if (!hit) return res.json({ ok: false, reason: 'no_cache', ticker });
+  res.json(tickerPayload(ticker, hit.signal, hit.chain, hit.at, hit.spark, 'cache'));
+});
+app.post('/api/ticker/:ticker/refresh', requireAuth, async (req, res) => {
+  const ticker = safeTicker(req.params.ticker);
+  if (!ticker) return res.status(400).json({ ok: false, error: 'Invalid ticker' });
+  if (OPT_PROVIDER.name === 'null') return res.status(400).json({ ok: false, error: OPT_PROVIDER.reason || 'No options provider configured' });
+  if (scanBusy(res)) return;
+  const gate = UW_LIMITER.canRequest();
+  if (!gate.ok) return res.status(429).json({ ok: false, error: 'LIMITER_SATURATED', reason: gate.reason, retryAfterMs: gate.retryAfterMs || null });
+  try {
+    const built = await buildTickerSignal(ticker, { sideEffects: false });
+    if (!built.ok) return res.json({ ok: false, status: built.status || null, reason: built.reason || null, error: built.error || built.detail || 'no options data' });
+    const hit = PIPE.lastSignals.get(ticker);
+    res.json(tickerPayload(ticker, built.signal, built.chain, hit ? hit.at : Date.now(), hit ? hit.spark : [], 'live'));
+  } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
 });
 
 // ---- ADVISORY AI layer (OpenRouter). On-demand only. Never alters the deterministic signal. ----
@@ -184,10 +214,14 @@ app.post('/api/scan/run', requireAuth, (req, res) => {
   const limit = Math.max(1, Math.min(500, Number(req.body && req.body.limit) || Number(process.env.SCAN_LIMIT) || 500));
   const script = path.join(__dirname, 'research', 'scan-universe.js');
   if (!fs.existsSync(script)) return res.status(500).json({ ok: false, error: 'scan-universe.js not found' });
-  SCAN_STATE.running = true; SCAN_STATE.startedAt = new Date().toISOString(); SCAN_STATE.finishedAt = null; SCAN_STATE.lastOk = null; SCAN_STATE.message = 'running'; SCAN_STATE.limit = limit;
+  SCAN_STATE.running = true; SCAN_STATE.done = null; SCAN_STATE.total = null; SCAN_STATE.etaMs = null; SCAN_STATE.startedAt = new Date().toISOString(); SCAN_STATE.finishedAt = null; SCAN_STATE.lastOk = null; SCAN_STATE.message = 'running'; SCAN_STATE.limit = limit;
   const child = spawn(process.execPath, [script], { cwd: __dirname, env: { ...process.env, SCAN_LIMIT: String(limit) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let tail = '';
-  const grab = (b) => { tail = (tail + b.toString()).slice(-2000); };
+  const grab = (b) => {
+    tail = (tail + b.toString()).slice(-2000);
+    const m = [...tail.matchAll(/(\d+)\/(\d+) scanned/g)].pop();
+    if (m) { SCAN_STATE.done = Number(m[1]); SCAN_STATE.total = Number(m[2]); const el = Date.now() - Date.parse(SCAN_STATE.startedAt); SCAN_STATE.etaMs = SCAN_STATE.done > 0 ? Math.max(0, Math.round(el / SCAN_STATE.done * (SCAN_STATE.total - SCAN_STATE.done))) : null; }
+  };
   child.stdout.on('data', grab); child.stderr.on('data', grab);
   child.on('close', (code) => {
     SCAN_STATE.running = false; SCAN_STATE.finishedAt = new Date().toISOString();
@@ -207,8 +241,11 @@ app.get('/api/signals/us', requireAuth, (req, res) => {
   if (!cache || !Array.isArray(cache.rows)) {
     return res.json({ ok: true, available: false, reason: 'No scan yet — press “Run Scan” to fetch fresh data.', dataStatus: 'DATA UNAVAILABLE', rows: [] });
   }
-  const ageMs = Date.now() - Date.parse(cache.generatedAt || 0);
   const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 500));
+  const etag = `"${cache.generatedAt}-${limit}"`;
+  res.setHeader('ETag', etag); res.setHeader('Cache-Control', 'no-cache');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  const ageMs = Date.now() - Date.parse(cache.generatedAt || 0);
   const rows = cache.rows.slice(0, limit);
   res.json({
     ok: true, available: true, generatedAt: cache.generatedAt, ageSeconds: Math.round(ageMs / 1000),

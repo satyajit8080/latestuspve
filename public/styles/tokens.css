@@ -1,0 +1,22 @@
+:root{
+  --bg-0:#0A0D12; --bg-1:#0F131A; --bg-2:#141A23; --bg-3:#1A212C;
+  --border-1:#1F2733; --border-2:#2A3442; --border-focus:#6EA8FF;
+  --text-1:#E6EAF0; --text-2:#A3AEBD; --text-3:#8C97A8;
+  --bull:#3FCF8E; --bull-bg:rgba(63,207,142,.10); --bull-line:rgba(63,207,142,.35);
+  --bear:#F2646A; --bear-bg:rgba(242,100,106,.10); --bear-line:rgba(242,100,106,.35);
+  --neutral:#98A2B3; --neutral-bg:rgba(152,162,179,.08);
+  --gated:#E0A43B; --gated-bg:rgba(224,164,59,.10); --gated-line:rgba(224,164,59,.40);
+  --shadow:#A79BFF; --shadow-bg:rgba(167,155,255,.08); --shadow-line:rgba(167,155,255,.30);
+  --info:#6EA8FF; --info-hover:#8DBBFF; --on-info:#06101F; --danger:#F2646A;
+  --live:#3FCF8E; --stale:#E0A43B; --offline:#F2646A; --idle:#5B6575;
+  --font-ui:"Inter var","Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-num:"JetBrains Mono","IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --fs-11:11px; --fs-12:12px; --fs-13:13px; --fs-14:14px; --fs-16:16px; --fs-20:20px; --fs-28:28px;
+  --lh-tight:1.2; --lh:1.45; --fw-reg:450; --fw-med:550; --fw-bold:650; --tracking-caps:.06em;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-8:32px;
+  --row-h-compact:28px; --row-h:32px; --row-h-comfy:40px; --row-h-current:var(--row-h-compact);
+  --r-1:4px; --r-2:6px; --r-3:8px;
+  --shadow-pop:0 8px 24px rgba(0,0,0,.45),0 0 0 1px var(--border-2);
+  --dur-1:120ms; --dur-2:200ms; --dur-3:320ms; --ease:cubic-bezier(.2,.8,.2,1);
+}
+@media (prefers-reduced-motion:reduce){:root{--dur-1:0ms;--dur-2:0ms;--dur-3:0ms}}

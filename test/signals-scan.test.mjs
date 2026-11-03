@@ -60,9 +60,8 @@ test('limit param bounds the rows returned', async () => {
   assert.equal(r.rows[0].ticker, 'NVDA');
 });
 
-test('the Signals menu + page are served in the SPA shell', async () => {
+test('the desk shell is served and loads its modules', async () => {
   const html = await (await real(B + '/')).text();
-  assert.match(html, /data-tab="signals"/, 'nav item missing');
-  assert.match(html, /data-page="signals"/, 'page panel missing');
-  assert.match(html, /id="sigTable"/, 'table container missing');
+  assert.match(html, /app\/main\.js/, 'entry module missing');
+  for (const f of ['/styles/tokens.css', '/styles/components.css', '/app/main.js', '/views/scan.js', '/data/nyse-calendar.json']) assert.equal((await real(B + f)).status, 200, f);
 });

@@ -336,7 +336,7 @@ export function journalRow(r) {
   return {
     id: r.id, ticker: r.ticker, firedAt: r.firedAt, dir: r.composite.dir,
     signal: r.composite.dir === 'bull' ? 'CALL' : r.composite.dir === 'bear' ? 'PUT' : 'WATCH',
-    score: r.composite.finalScore, v2Score: r.v2 && isNum(r.v2.score) ? r.v2.score : null,
+    score: r.composite.finalScore, gated: !!r.composite.gated, v2Score: r.v2 && isNum(r.v2.score) ? r.v2.score : null,
     entryStock: r.entry ? r.entry.stockPrice : null, entryOption: r.entry ? r.entry.optionPrice : null,
     r30m: resolved30, r1h: resolved1h,
     status: (resolved1h != null) ? (resolved1h > 0 ? 'WIN' : 'LOSS') : (resolved30 != null ? 'PARTIAL' : 'PENDING'),

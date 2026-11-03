@@ -251,6 +251,6 @@ async function _compute(P, ticker, ctx, { sideEffects, now = new Date(), gap = 0
   // The ONLY place v2 can replace the published score: validated/promotion.json (human-edited, default 'opt').
   applyPromotion(sig, v2, ctx.promotion);
   const out = { ok: true, signal: sig, chain, v2, v2state, readiness, extras: { vwap, vsVwapPct, changePct, atr, entryOption, oiChange, ohlc, ivRank } };
-  ctx.lastSignals.set(ticker, { signal: sig, chain, at: Date.now() });
+  ctx.lastSignals.set(ticker, { signal: sig, chain, at: Date.now(), spark: bars.slice(-30).map((b) => b.close).filter(isNum) });
   return out;
 }

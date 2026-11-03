@@ -17,14 +17,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
 
 // ---- honest derivations (documented; never a probability of profit) ----
-function marketBias(score, dir) {
-  if (!isNum(score)) return 'UNAVAILABLE';
-  if (score >= 80) return 'STRONG';
-  if (score >= 65) return dir === 'bull' ? 'BULLISH' : dir === 'bear' ? 'BEARISH' : 'WATCH';
-  if (score >= 50) return 'WATCH';
-  if (score >= 35) return 'WEAK';
-  return 'AVOID';
-}
 // CALL/PUT labels need an ACTIONABLE signal (price gate, liquidity, RTH, earnings, >=2 directional features) and score >= 65.
 export function signalFrom(sig) {
   if (!sig || !isNum(sig.finalScore)) return 'DATA UNAVAILABLE';
@@ -57,7 +49,8 @@ export async function computeRow(P, ticker, opt) {
   const oiChange = extras.oiChange;
   return {
     ticker, sector: sectorMap[ticker] || null,
-    productionScore, signal: signalFrom(sig), marketBias: marketBias(productionScore, dir), dir,
+    productionScore, rawScore: sig.rawScore, gated: !!sig.gated, gateReasons: sig.gateReasons || [], actionable: !!sig.actionable, tradeable: sig.tradeable, outsideRth: !!sig.outsideRth, coverage: sig.coverage,
+    engineVersion: sig.optionsEngineVersion, signal: signalFrom(sig), dir,
     confidence: g(sig, 'dataQuality'),                  // data/conviction (0-100) — NOT a probability of profit
     price, changePct: extras.changePct, volume: g(chain, 'underlying', 'volume'),
     oiChangeNet: (oiChange && oiChange.available) ? oiChange.netOIChange : null,

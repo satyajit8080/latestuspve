@@ -202,31 +202,4 @@ test('research readiness reports actual values, never placeholders', () => {
   assert.equal(R.features.macro, FEATURE_STATE.UNAVAILABLE);
 });
 
-// ---------------------------------------------------------------- UI must not reference removed things
-test('the UI calls no removed PVE routes and shows no PVE data branding', () => {
-  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
-  const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
-  for (const dead of ["api('/flow')", "api('/markets'", "api('/flow/spikes')", "api('/flow/top-traders'", "'/api/me'", '/api/archive/', "api('/shadow/", "api('/validated/", "api('/explore"]) {
-    assert.ok(!app.includes(dead), `frontend still calls removed route: ${dead}`);
-  }
-  for (const s of ['pv' + 'e.trade', 'PV' + 'E.trade', 'pv' + 'e_live_', 'OPTIONS_PROVIDER=pv' + 'e']) {
-    assert.ok(!app.includes(s) && !html.includes(s), `stale PVE reference in UI: ${s}`);
-  }
-});
-
-test('the browser performs no automatic polling loop', () => {
-  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
-  assert.ok(!/scanTimer\s*=\s*setInterval\(\s*scan\b/.test(app), 'automatic scan polling must be removed (§1)');
-});
-
-// ---------------------------------------------------------------- UI is a thin shell
-test('public/ has no scoring math: the browser never imports an engine or recomputes a score', () => {
-  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
-  assert.ok(!/^import\s/m.test(app), 'app.js must not import scoring modules');
-  for (const bad of ['combineScores', 'optCombine', 'scoreFeatures', 'buildSignal', 'scoreOptions', 'weights']) assert.ok(!app.includes(bad), `UI must not reference ${bad}`);
-  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'overview-sim.js')), false);
-  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'engine.js')), false);
-  const files = fs.readdirSync(path.join(ROOT, 'public')).sort();
-  assert.deepEqual(files, ['app.js', 'index.html']);   // scoring lives in engine/, never under public/
-  assert.equal(fs.existsSync(path.join(ROOT, 'public', 'options-engine.js')), false);
-});
+// UI tests live in test/ui.test.mjs
