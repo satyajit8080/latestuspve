@@ -15,13 +15,14 @@ export function parseDirectory(text, { etf = true } = {}) {
   const lines = String(text).split(/\r?\n/).filter(Boolean);
   const head = lines[0].split('|'); const idx = (n) => head.indexOf(n);
   const sym = idx('Symbol') >= 0 ? idx('Symbol') : idx('ACT Symbol');
-  const test = idx('Test Issue'), isEtf = idx('ETF');
+  const test = idx('Test Issue'), isEtf = idx('ETF'), nameI = idx('Security Name');
   const out = [];
   for (const l of lines.slice(1)) {
     if (/^File Creation Time/i.test(l)) continue;
     const c = l.split('|'); const s = (c[sym] || '').trim();
     if (!/^[A-Z]{1,5}$/.test(s)) continue;
     if (test >= 0 && c[test] === 'Y') continue;
+    if (nameI >= 0 && /warrant|\brights?\b|\bunits?\b|preferred|depositary|notes? due|\bnotes\b/i.test(c[nameI] || '')) continue;
     if (!etf && isEtf >= 0 && c[isEtf] === 'Y') continue;
     out.push(s);
   }
