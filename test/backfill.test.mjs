@@ -163,3 +163,10 @@ test('limited endpoints: a full page is flagged truncated in the manifest', asyn
   const f = JSON.parse(fs.readFileSync(path.join(out, 'chain', 'AAPL', '2026-11-03.json'), 'utf8'));
   assert.equal(f.meta.truncated, true); assert.equal(f.meta.rows, 500);
 });
+
+test('a single-object payload is counted as 1 row (not reported empty)', async () => {
+  const out = tmp();
+  const jobs = buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03'], endpoints: ['gexlevels'] });
+  const s = await runBackfill({ jobs, out, token: TOKEN, sleep: noSleep, rpm: 60000, fetchImpl: async () => res(200, { data: { gamma_flip: 100, call_wall: 110 } }) });
+  assert.equal(s['gexlevels-oi'].ok, 1); assert.equal(s['gexlevels-oi'].empty, 0);
+});

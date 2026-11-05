@@ -101,7 +101,7 @@ export async function downloadFile(pathq, dest, { base, token, fetchImpl = fetch
   }
   return last;
 }
-const rowsOf = (b) => (Array.isArray(b) ? b : b && Array.isArray(b.data) ? b.data : []);
+const rowsOf = (b) => (Array.isArray(b) ? b : b && Array.isArray(b.data) ? b.data : b && b.data && typeof b.data === 'object' && Object.keys(b.data).length ? [b.data] : []);   // a single-object payload counts as 1 row, not 0
 const isHistoryLimit = (r) => r.status === 403 && /historic|history|lookback|access/i.test(String(r.error || JSON.stringify(r.body || '')));
 
 // flow alerts have no per-ticker date filter: page backwards inside the ET day with newer_than / older_than.
