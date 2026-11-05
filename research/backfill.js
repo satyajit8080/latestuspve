@@ -41,10 +41,10 @@ export function buildPlan({ tickers, dates, endpoints = DEFAULT_ENDPOINTS }) {
     if (has('market')) { jobs.push({ key: `market/market-tide/${date}`, endpoint: 'market-tide', scope: 'market', date, path: `/api/market/market-tide?date=${date}` }); for (const sec of SECTORS) jobs.push({ key: `market/sector-tide-${slug(sec)}/${date}`, endpoint: `sector-tide-${slug(sec)}`, scope: 'market', date, path: `/api/market/${enc(sec)}/sector-tide?date=${date}` }); }
     if (has('fulltape')) jobs.push({ key: `fulltape/${date}`, endpoint: 'fulltape', scope: 'market', date, kind: 'file', path: `/api/option-trades/full-tape/${date}` });
     for (const t of tickers) {
-      if (has('chain')) jobs.push({ key: `chain/${t}/${date}`, endpoint: 'chain', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/option-contracts?date=${date}` });
+      if (has('chain')) jobs.push({ key: `chain/${t}/${date}`, endpoint: 'chain', scope: 'ticker', ticker: t, date, dateSensitive: true, limit: 500, path: `/api/stock/${enc(t)}/option-contracts?date=${date}` });
       if (has('gexlevels')) for (const src of ['oi', 'vol']) jobs.push({ key: `gexlevels-${src}/${t}/${date}`, endpoint: `gexlevels-${src}`, scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/gex-levels?date=${date}&source=${src}` });
-      if (has('bars5m')) jobs.push({ key: `bars5m/${t}/${date}`, endpoint: 'bars5m', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/ohlc/5m?date=${date}&limit=200` });
-      if (has('darkpool')) jobs.push({ key: `darkpool/${t}/${date}`, endpoint: 'darkpool', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/darkpool/${enc(t)}?date=${date}&limit=500` });
+      if (has('bars5m')) jobs.push({ key: `bars5m/${t}/${date}`, endpoint: 'bars5m', scope: 'ticker', ticker: t, date, dateSensitive: true, limit: 200, path: `/api/stock/${enc(t)}/ohlc/5m?date=${date}&limit=200` });
+      if (has('darkpool')) jobs.push({ key: `darkpool/${t}/${date}`, endpoint: 'darkpool', scope: 'ticker', ticker: t, date, dateSensitive: true, limit: 500, path: `/api/darkpool/${enc(t)}?date=${date}&limit=500` });
       if (has('termstructure')) jobs.push({ key: `termstructure/${t}/${date}`, endpoint: 'termstructure', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/volatility/term-structure?date=${date}` });
       if (has('flow')) jobs.push({ key: `flow/${t}/${date}`, endpoint: 'flow', scope: 'ticker', ticker: t, date, paged: true });
       if (has('tape')) jobs.push({ key: `tape/${t}/${date}`, endpoint: 'tape', scope: 'ticker', ticker: t, date, path: `/api/stock/${enc(t)}/net-prem-ticks?date=${date}` });
@@ -150,7 +150,7 @@ export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales
     else if (j.kind === 'file') { const slot = Math.max(lastAt + spacing, pauseUntil, now()); lastAt = slot; if (slot - now() > 0) await sleep(slot - now()); r = await downloadFile(j.path, f, { base, token, fetchImpl, sleep, onThrottle: (ms) => { pauseUntil = Math.max(pauseUntil, now() + ms); } }); }
     else r = await get(j.path);
     const rows = r.rows ?? rowsOf(r.body).length;
-    const meta = { endpoint: j.endpoint, ticker: j.ticker || null, date: j.date, path: j.paged ? '/api/option-trades/flow-alerts' : j.path, requestedAt, status: r.status, rows, pages: r.pages ?? 1, truncated: !!r.truncated, error: r.status === 200 ? null : String(r.error || '').slice(0, 200) };
+    const meta = { endpoint: j.endpoint, ticker: j.ticker || null, date: j.date, path: j.paged ? '/api/option-trades/flow-alerts' : j.path, requestedAt, status: r.status, rows, pages: r.pages ?? 1, truncated: !!r.truncated || (j.limit != null && rows >= j.limit), error: r.status === 200 ? null : String(r.error || '').slice(0, 200) };
     if (r.status === 200 && j.dateSensitive && rows > 0) {      // a date parameter the API silently ignores returns the SAME payload for every date
       const h = crypto.createHash('sha1').update(JSON.stringify(r.body)).digest('hex'); const k = `${j.endpoint}|${j.ticker}`; const prev = lastHash.get(k);
       lastHash.set(k, { h, date: j.date });

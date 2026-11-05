@@ -155,3 +155,11 @@ test('fulltape job runs through the runner and is resumable; disk guard halts ev
   await runBackfill({ jobs: many, out: out2, token: TOKEN, fetchImpl: async () => { c2++; return res(200, { data: [{ a: 1 }] }); }, sleep: noSleep, rpm: 60000, freeBytes: () => 1e9, minFreeGb: 50, log: (m) => logs.push(m) });
   assert.equal(c2, 0, 'no download may start when the disk is below the floor'); assert.ok(logs.some((m) => /STOPPED: only 1.0 GB free/.test(m)));
 });
+
+test('limited endpoints: a full page is flagged truncated in the manifest', async () => {
+  const out = tmp();
+  const jobs = buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03'], endpoints: ['chain'] });
+  await runBackfill({ jobs, out, token: TOKEN, sleep: noSleep, rpm: 60000, fetchImpl: async () => res(200, { data: Array.from({ length: 500 }, (_, i) => ({ i })) }) });
+  const f = JSON.parse(fs.readFileSync(path.join(out, 'chain', 'AAPL', '2026-11-03.json'), 'utf8'));
+  assert.equal(f.meta.truncated, true); assert.equal(f.meta.rows, 500);
+});
