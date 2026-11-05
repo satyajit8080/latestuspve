@@ -4,7 +4,7 @@
 //   node scripts/uw-backfill.mjs plan   --file research-data/tickers.txt --days 60     how many calls / how long? (no requests)
 //   node scripts/uw-backfill.mjs run    --file research-data/tickers.txt --days 60     download, resumable (re-run to continue)
 //   node scripts/uw-backfill.mjs status                                 progress from the manifest
-// Options: --tickers A,B,C  --from YYYY-MM-DD --to YYYY-MM-DD  --days N  --endpoints flow,tape,oi,series,market  --rpm 100  --out research-data/backfill
+// Options: --tickers A,B,C  --from YYYY-MM-DD --to YYYY-MM-DD  --days N  --endpoints flow,tape,oi,series,market  --rpm 100  --out research-data/backfill  --no-gzip (default: files are stored gzip-compressed, *.json.gz)
 // The token is never printed or written to disk. Raw responses are stored unchanged and never overwritten.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -52,7 +52,7 @@ if (cmd === 'probe') {
   need();
   const { t, from, to, list } = jobs();
   console.log(`Backfilling ${t.length} tickers, ${from}..${to}, ${list.length} requests at ${rpm}/min → ${out}\nSafe to stop (Ctrl+C) and re-run: finished files are skipped.`);
-  const stats = await runBackfill({ jobs: list, out, base, token, rpm, log: (m) => console.log(m) });
+  const stats = await runBackfill({ jobs: list, out, base, token, rpm, gzip: !flags['no-gzip'], log: (m) => console.log(m) });
   console.log('\nDone.\n' + Object.entries(stats).map(([k, s]) => `${k.padEnd(12)} ok=${s.ok} empty=${s.empty} skipped=${s.skipped} error=${s.error} history-limit=${s.limit}`).join('\n'));
 } else if (cmd === 'status') {
   console.log(summarize(out));

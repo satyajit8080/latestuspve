@@ -8,6 +8,7 @@
 //          <out>/manifest.jsonl                           one line per call: no payload, no token
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 const sleepDefault = (ms) => new Promise((r) => setTimeout(r, ms));
 const enc = encodeURIComponent;
@@ -87,7 +88,7 @@ async function fetchFlowDay(job, ctx) {
 }
 
 // ---- runner ---------------------------------------------------------------------------------------------------
-export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages }) {
+export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages, gzip = false }) {
   fs.mkdirSync(out, { recursive: true });
   const manifest = path.join(out, 'manifest.jsonl'); const spacing = Math.ceil(60000 / Math.max(1, rpm));
   let lastAt = 0;
@@ -97,12 +98,13 @@ export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales
   for (const j of jobs) {
     const f = fileFor(out, j);
     if (stopped.has(j.endpoint)) { bump(j.endpoint, 'limit'); continue; }
-    try { if (fs.existsSync(f) && JSON.parse(fs.readFileSync(f, 'utf8')).meta.status === 200) { bump(j.endpoint, 'skipped'); continue; } } catch { /* refetch a corrupt file */ }
+    // only complete 200 responses are ever written (atomic rename), so existence of either form means "done"
+    if (fs.existsSync(f) || fs.existsSync(`${f}.gz`)) { bump(j.endpoint, 'skipped'); continue; }
     const requestedAt = new Date(now()).toISOString();
     const r = j.paged ? await fetchFlowDay(j, ctx) : await get(j.path);
     const rows = r.rows ?? rowsOf(r.body).length;
     const meta = { endpoint: j.endpoint, ticker: j.ticker || null, date: j.date, path: j.paged ? '/api/option-trades/flow-alerts' : j.path, requestedAt, status: r.status, rows, pages: r.pages ?? 1, truncated: !!r.truncated, error: r.status === 200 ? null : String(r.error || '').slice(0, 200) };
-    if (r.status === 200) { fs.mkdirSync(path.dirname(f), { recursive: true }); const tmp = `${f}.tmp`; fs.writeFileSync(tmp, JSON.stringify({ meta, data: r.body })); fs.renameSync(tmp, f); bump(j.endpoint, rows ? 'ok' : 'empty'); }
+    if (r.status === 200) { fs.mkdirSync(path.dirname(f), { recursive: true }); const body = JSON.stringify({ meta, data: r.body }); const dest = gzip ? `${f}.gz` : f; const tmp = `${dest}.tmp`; fs.writeFileSync(tmp, gzip ? zlib.gzipSync(body) : body); fs.renameSync(tmp, dest); bump(j.endpoint, rows ? 'ok' : 'empty'); }
     else bump(j.endpoint, isHistoryLimit(r) ? 'limit' : 'error');
     fs.appendFileSync(manifest, JSON.stringify(meta) + '\n');
     if (isHistoryLimit(r) && j.date !== 'series') { stopped.add(j.endpoint); log(`${j.endpoint}: history limit reached at ${j.date} (HTTP 403) — older dates for this endpoint skipped`); }

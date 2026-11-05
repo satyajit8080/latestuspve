@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { tradingDays, etDayBounds, buildPlan, runBackfill, getJson, probe, summarize } from '../research/backfill.js';
 
 const TOKEN = 'uw_SECRET_TOKEN_123';
@@ -80,4 +81,17 @@ test('getJson: retries 429 then succeeds; gives up on persistent 5xx without thr
 test('probe output never contains the token', async () => {
   const text = await probe({ token: TOKEN, ticker: 'AAPL', dates: ['2026-11-03', '2025-01-02'], sleep: noSleep, fetchImpl: async (u) => (u.includes('2025-01-02') ? res(403, { code: 'historic_data_access_missing' }) : res(200, { data: [{ net_delta: 1 }] })) });
   assert.ok(!text.includes(TOKEN)); assert.match(text, /HTTP 403 historic_data_access_missing/); assert.match(text, /net_delta/);
+});
+
+test('gzip: stores .json.gz, round-trips, and resume recognises either form', async () => {
+  const out = tmp(); let calls = 0;
+  const fetchImpl = async () => { calls++; return res(200, { data: [{ a: 1 }] }); };
+  const jobs = buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03'], endpoints: ['tape'] });
+  await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 6000, gzip: true });
+  const f = path.join(out, 'tape', 'AAPL', '2026-11-03.json.gz');
+  assert.ok(fs.existsSync(f)); assert.ok(!fs.existsSync(f.replace('.gz', '')));
+  assert.equal(JSON.parse(zlib.gunzipSync(fs.readFileSync(f)).toString()).meta.rows, 1);
+  const s = await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 6000, gzip: true });
+  assert.equal(calls, 1); assert.equal(s.tape.skipped, 1);
+  assert.ok(!allText(out).includes(TOKEN));
 });
