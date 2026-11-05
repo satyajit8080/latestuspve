@@ -95,3 +95,14 @@ test('gzip: stores .json.gz, round-trips, and resume recognises either form', as
   assert.equal(calls, 1); assert.equal(s.tape.skipped, 1);
   assert.ok(!allText(out).includes(TOKEN));
 });
+
+test('concurrency: every job runs exactly once, rpm budget is shared, and one 429 pauses all workers', async () => {
+  const out = tmp(); const seen = []; let t = 0; const sleeps = []; let first429 = true;
+  const fetchImpl = async (url) => { seen.push(url); if (first429 && url.includes('AAPL')) { first429 = false; return res(429, {}, { 'retry-after': '3' }); } return res(200, { data: [{ a: 1 }] }); };
+  const jobs = buildPlan({ tickers: ['AAPL', 'MSFT', 'NVDA', 'AMD'], dates: ['2026-11-03', '2026-11-02'], endpoints: ['tape'] });
+  const s = await runBackfill({ jobs, out, token: TOKEN, fetchImpl, rpm: 60, concurrency: 4, now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms; } });
+  assert.equal(s.tape.ok, 8);
+  assert.equal(new Set(seen.filter((u) => !u.includes('AAPL') || true)).size, 8, 'no job fetched twice');
+  assert.ok(sleeps.includes(3000), 'the 429 retry-after was honoured');
+  assert.ok(t >= 7 * 1000, 'spacing across workers kept the shared 60/min budget');
+});

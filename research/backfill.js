@@ -51,13 +51,13 @@ export function buildPlan({ tickers, dates, endpoints = DEFAULT_ENDPOINTS }) {
 const fileFor = (out, j) => (j.scope === 'market' ? path.join(out, 'market', j.endpoint, `${j.date}.json`) : path.join(out, j.endpoint, j.ticker, `${j.date}.json`));
 
 // ---- one HTTP call (retry/backoff; the token is never logged or stored) --------------------------------------
-export async function getJson(pathq, { base, token, fetchImpl = fetch, sleep = sleepDefault, maxAttempts = 5 }) {
+export async function getJson(pathq, { base, token, fetchImpl = fetch, sleep = sleepDefault, maxAttempts = 5, onThrottle = null }) {
   let last = { status: 0, error: 'no attempt' };
   for (let a = 0; a < maxAttempts; a++) {
     let res;
     try { res = await fetchImpl(`${base}${pathq}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }); }
     catch { last = { status: 0, error: 'network' }; await sleep(Math.min(30000, 1000 * 2 ** a)); continue; }
-    if (res.status === 429) { const ra = Number(res.headers && res.headers.get && res.headers.get('retry-after')); last = { status: 429, error: 'rate limited' }; await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(60000, 5000 * (a + 1))); continue; }
+    if (res.status === 429) { const ra = Number(res.headers && res.headers.get && res.headers.get('retry-after')); last = { status: 429, error: 'rate limited' }; const w429 = Number.isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(60000, 5000 * (a + 1)); if (onThrottle) onThrottle(w429); await sleep(w429); continue; }
     if (res.status >= 500) { last = { status: res.status, error: `server ${res.status}` }; await sleep(Math.min(30000, 1000 * 2 ** a)); continue; }
     let body = null; let text = '';
     try { text = await res.text(); body = JSON.parse(text); } catch { body = null; }
@@ -88,18 +88,25 @@ async function fetchFlowDay(job, ctx) {
 }
 
 // ---- runner ---------------------------------------------------------------------------------------------------
-export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages, gzip = false }) {
+export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages, gzip = false, concurrency = 1 }) {
   fs.mkdirSync(out, { recursive: true });
   const manifest = path.join(out, 'manifest.jsonl'); const spacing = Math.ceil(60000 / Math.max(1, rpm));
-  let lastAt = 0;
-  const get = async (p) => { const wait = lastAt + spacing - now(); if (wait > 0) await sleep(wait); lastAt = now(); return getJson(p, { base, token, fetchImpl, sleep }); };
+  let lastAt = 0; let pauseUntil = 0;
+  // Reserve the next request slot BEFORE waiting, so N workers still share one rpm budget; a 429 pauses every worker.
+  const get = async (p) => {
+    const slot = Math.max(lastAt + spacing, pauseUntil, now()); lastAt = slot;
+    const wait = slot - now(); if (wait > 0) await sleep(wait);
+    return getJson(p, { base, token, fetchImpl, sleep, onThrottle: (ms) => { pauseUntil = Math.max(pauseUntil, now() + ms); } });
+  };
   const ctx = { get, maxFlowPages }; const stopped = new Set(); const stats = {};
   const bump = (ep, k) => { (stats[ep] ||= { ok: 0, empty: 0, skipped: 0, error: 0, limit: 0 })[k]++; };
-  for (const j of jobs) {
+  let next = 0;
+  const worker = async () => { for (;;) { const idx = next++; if (idx >= jobs.length) return; await doJob(jobs[idx]); } };
+  async function doJob(j) {
     const f = fileFor(out, j);
-    if (stopped.has(j.endpoint)) { bump(j.endpoint, 'limit'); continue; }
+    if (stopped.has(j.endpoint)) { bump(j.endpoint, 'limit'); return; }
     // only complete 200 responses are ever written (atomic rename), so existence of either form means "done"
-    if (fs.existsSync(f) || fs.existsSync(`${f}.gz`)) { bump(j.endpoint, 'skipped'); continue; }
+    if (fs.existsSync(f) || fs.existsSync(`${f}.gz`)) { bump(j.endpoint, 'skipped'); return; }
     const requestedAt = new Date(now()).toISOString();
     const r = j.paged ? await fetchFlowDay(j, ctx) : await get(j.path);
     const rows = r.rows ?? rowsOf(r.body).length;
@@ -110,6 +117,7 @@ export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales
     if (isHistoryLimit(r) && j.date !== 'series') { stopped.add(j.endpoint); log(`${j.endpoint}: history limit reached at ${j.date} (HTTP 403) — older dates for this endpoint skipped`); }
     else if (r.status !== 200) log(`${j.key}: HTTP ${r.status} ${meta.error || ''}`);
   }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(32, concurrency)) }, worker));
   return stats;
 }
 
