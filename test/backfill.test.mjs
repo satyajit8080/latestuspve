@@ -23,7 +23,7 @@ test('etDayBounds: DST-safe ET calendar day', () => {
 test('buildPlan: newest date first, per-ticker + market + series jobs', () => {
   const jobs = buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03', '2026-11-02'] });
   assert.equal(jobs[0].date, '2026-11-03');
-  for (const e of ['flow', 'tape', 'oi', 'gex', 'ohlc1d', 'skew', 'ivrank', 'market-tide', 'sector-tide']) assert.ok(jobs.some((j) => j.endpoint === e), e);
+  for (const e of ['flow', 'tape', 'oi', 'gex', 'ohlc1d', 'skew', 'ivrank', 'market-tide', 'sector-tide-technology', 'sector-tide-financial-services']) assert.ok(jobs.some((j) => j.endpoint === e), e);
 });
 
 test('run: writes raw files + manifest, never stores the token, and RESUMES without refetching', async () => {

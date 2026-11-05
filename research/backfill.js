@@ -12,6 +12,8 @@ import path from 'node:path';
 const sleepDefault = (ms) => new Promise((r) => setTimeout(r, ms));
 const enc = encodeURIComponent;
 export const DEFAULT_ENDPOINTS = ['flow', 'tape', 'oi', 'series', 'market'];
+export const SECTORS = ['Technology', 'Healthcare', 'Financial Services', 'Consumer Cyclical', 'Consumer Defensive', 'Industrials', 'Energy', 'Utilities', 'Real Estate', 'Basic Materials', 'Communication Services'];
+const slug = (x) => x.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
 // ---- dates ----------------------------------------------------------------------------------------------------
 export function tradingDays(from, to) {              // Mon–Fri between from..to inclusive, NEWEST FIRST. Holidays return empty data.
@@ -30,7 +32,7 @@ export function etDayBounds(date) {                  // [start, end) of an ET ca
 export function buildPlan({ tickers, dates, endpoints = DEFAULT_ENDPOINTS }) {
   const has = (e) => endpoints.includes(e); const jobs = [];
   for (const date of dates) {                         // newest first so a history-limit 403 only costs the oldest days
-    if (has('market')) { jobs.push({ key: `market/market-tide/${date}`, endpoint: 'market-tide', scope: 'market', date, path: `/api/market/market-tide?date=${date}` }); jobs.push({ key: `market/sector-tide/${date}`, endpoint: 'sector-tide', scope: 'market', date, path: `/api/market/sector-tide?date=${date}` }); }
+    if (has('market')) { jobs.push({ key: `market/market-tide/${date}`, endpoint: 'market-tide', scope: 'market', date, path: `/api/market/market-tide?date=${date}` }); for (const sec of SECTORS) jobs.push({ key: `market/sector-tide-${slug(sec)}/${date}`, endpoint: `sector-tide-${slug(sec)}`, scope: 'market', date, path: `/api/market/${enc(sec)}/sector-tide?date=${date}` }); }
     for (const t of tickers) {
       if (has('flow')) jobs.push({ key: `flow/${t}/${date}`, endpoint: 'flow', scope: 'ticker', ticker: t, date, paged: true });
       if (has('tape')) jobs.push({ key: `tape/${t}/${date}`, endpoint: 'tape', scope: 'ticker', ticker: t, date, path: `/api/stock/${enc(t)}/net-prem-ticks?date=${date}` });
@@ -123,7 +125,7 @@ export async function probe({ base = 'https://api.unusualwhales.com', token, tic
     ['net-prem-ticks', `/api/stock/${ticker}/net-prem-ticks?date=${d0}`], ['oi-change (ticker, date)', `/api/stock/${ticker}/oi-change?date=${d0}`],
     ['greek-exposure 2Y series', `/api/stock/${ticker}/greek-exposure?timeframe=2Y`], ['ohlc 1d', `/api/stock/${ticker}/ohlc/1d?limit=3`],
     ['historical-risk-reversal-skew', `/api/stock/${ticker}/historical-risk-reversal-skew`], ['iv-rank', `/api/stock/${ticker}/iv-rank`],
-    ['market-tide', `/api/market/market-tide?date=${d0}`], ['sector-tide', `/api/market/sector-tide?date=${d0}`],
+    ['market-tide', `/api/market/market-tide?date=${d0}`], ['sector-tide (Technology)', `/api/market/Technology/sector-tide?date=${d0}`],
   ];
   for (const [label, p] of checks) {
     const r = await get(p);
