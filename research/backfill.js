@@ -9,10 +9,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const sleepDefault = (ms) => new Promise((r) => setTimeout(r, ms));
 const enc = encodeURIComponent;
 export const DEFAULT_ENDPOINTS = ['flow', 'tape', 'oi', 'series', 'market'];
+// Opt-in extras (not in the default run). 'fulltape' is HUGE (whole-market trades per day): run it for a few days only.
+export const EXTRA_ENDPOINTS = ['chain', 'gexlevels', 'bars5m', 'darkpool', 'termstructure', 'earnings', 'insider', 'congress'];
 export const SECTORS = ['Technology', 'Healthcare', 'Financial Services', 'Consumer Cyclical', 'Consumer Defensive', 'Industrials', 'Energy', 'Utilities', 'Real Estate', 'Basic Materials', 'Communication Services'];
 const slug = (x) => x.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
@@ -34,7 +39,13 @@ export function buildPlan({ tickers, dates, endpoints = DEFAULT_ENDPOINTS }) {
   const has = (e) => endpoints.includes(e); const jobs = [];
   for (const date of dates) {                         // newest first so a history-limit 403 only costs the oldest days
     if (has('market')) { jobs.push({ key: `market/market-tide/${date}`, endpoint: 'market-tide', scope: 'market', date, path: `/api/market/market-tide?date=${date}` }); for (const sec of SECTORS) jobs.push({ key: `market/sector-tide-${slug(sec)}/${date}`, endpoint: `sector-tide-${slug(sec)}`, scope: 'market', date, path: `/api/market/${enc(sec)}/sector-tide?date=${date}` }); }
+    if (has('fulltape')) jobs.push({ key: `fulltape/${date}`, endpoint: 'fulltape', scope: 'market', date, kind: 'file', path: `/api/option-trades/full-tape/${date}` });
     for (const t of tickers) {
+      if (has('chain')) jobs.push({ key: `chain/${t}/${date}`, endpoint: 'chain', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/option-contracts?date=${date}` });
+      if (has('gexlevels')) for (const src of ['oi', 'vol']) jobs.push({ key: `gexlevels-${src}/${t}/${date}`, endpoint: `gexlevels-${src}`, scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/gex-levels?date=${date}&source=${src}` });
+      if (has('bars5m')) jobs.push({ key: `bars5m/${t}/${date}`, endpoint: 'bars5m', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/ohlc/5m?date=${date}&limit=200` });
+      if (has('darkpool')) jobs.push({ key: `darkpool/${t}/${date}`, endpoint: 'darkpool', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/darkpool/${enc(t)}?date=${date}&limit=500` });
+      if (has('termstructure')) jobs.push({ key: `termstructure/${t}/${date}`, endpoint: 'termstructure', scope: 'ticker', ticker: t, date, dateSensitive: true, path: `/api/stock/${enc(t)}/volatility/term-structure?date=${date}` });
       if (has('flow')) jobs.push({ key: `flow/${t}/${date}`, endpoint: 'flow', scope: 'ticker', ticker: t, date, paged: true });
       if (has('tape')) jobs.push({ key: `tape/${t}/${date}`, endpoint: 'tape', scope: 'ticker', ticker: t, date, path: `/api/stock/${enc(t)}/net-prem-ticks?date=${date}` });
       if (has('oi')) jobs.push({ key: `oi/${t}/${date}`, endpoint: 'oi', scope: 'ticker', ticker: t, date, path: `/api/stock/${enc(t)}/oi-change?date=${date}` });
@@ -46,9 +57,14 @@ export function buildPlan({ tickers, dates, endpoints = DEFAULT_ENDPOINTS }) {
     jobs.push({ key: `skew/${t}/series`, endpoint: 'skew', scope: 'ticker', ticker: t, date: 'series', path: `/api/stock/${enc(t)}/historical-risk-reversal-skew` });
     jobs.push({ key: `ivrank/${t}/series`, endpoint: 'ivrank', scope: 'ticker', ticker: t, date: 'series', path: `/api/stock/${enc(t)}/iv-rank` });
   }
+  for (const t of tickers) {
+    if (has('earnings')) jobs.push({ key: `earnings/${t}/series`, endpoint: 'earnings', scope: 'ticker', ticker: t, date: 'series', path: `/api/earnings/${enc(t)}` });
+    if (has('insider')) jobs.push({ key: `insider/${t}/series`, endpoint: 'insider', scope: 'ticker', ticker: t, date: 'series', path: `/api/insider/${enc(t)}` });
+    if (has('congress')) jobs.push({ key: `congress/${t}/series`, endpoint: 'congress', scope: 'ticker', ticker: t, date: 'series', path: `/api/congress/recent-trades?ticker=${enc(t)}&limit=500` });
+  }
   return jobs;
 }
-const fileFor = (out, j) => (j.scope === 'market' ? path.join(out, 'market', j.endpoint, `${j.date}.json`) : path.join(out, j.endpoint, j.ticker, `${j.date}.json`));
+const fileFor = (out, j) => (j.kind === 'file' ? path.join(out, j.endpoint, `${j.date}.bin`) : j.scope === 'market' ? path.join(out, 'market', j.endpoint, `${j.date}.json`) : path.join(out, j.endpoint, j.ticker, `${j.date}.json`));
 
 // ---- one HTTP call (retry/backoff; the token is never logged or stored) --------------------------------------
 export async function getJson(pathq, { base, token, fetchImpl = fetch, sleep = sleepDefault, maxAttempts = 5, onThrottle = null }) {
@@ -63,6 +79,25 @@ export async function getJson(pathq, { base, token, fetchImpl = fetch, sleep = s
     try { text = await res.text(); body = JSON.parse(text); } catch { body = null; }
     if (!res.ok) return { status: res.status, error: (body && (body.code || body.message || body.error)) || text.slice(0, 160), body };
     return { status: res.status, body };
+  }
+  return last;
+}
+export async function downloadFile(pathq, dest, { base, token, fetchImpl = fetch, sleep = sleepDefault, maxAttempts = 3, onThrottle = null }) {
+  let last = { status: 0, error: 'no attempt' };
+  for (let a = 0; a < maxAttempts; a++) {
+    let res;
+    try { res = await fetchImpl(`${base}${pathq}`, { headers: { Authorization: `Bearer ${token}`, Accept: '*/*' } }); }
+    catch { last = { status: 0, error: 'network' }; await sleep(Math.min(30000, 1000 * 2 ** a)); continue; }
+    if (res.status === 429) { const ra = Number(res.headers && res.headers.get && res.headers.get('retry-after')); const w = Number.isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(60000, 5000 * (a + 1)); last = { status: 429, error: 'rate limited' }; if (onThrottle) onThrottle(w); await sleep(w); continue; }
+    if (res.status >= 500) { last = { status: res.status, error: `server ${res.status}` }; await sleep(Math.min(30000, 1000 * 2 ** a)); continue; }
+    if (!res.ok) { let t = ''; try { t = (await res.text()).slice(0, 160); } catch { /* ignore */ } return { status: res.status, error: t }; }
+    fs.mkdirSync(path.dirname(dest), { recursive: true }); const tmp = `${dest}.tmp`;
+    try {
+      if (res.body && Readable.fromWeb) await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+      else fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer ? await res.arrayBuffer() : await res.text()));
+    } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } last = { status: 0, error: 'stream failed' }; await sleep(1000); continue; }
+    fs.renameSync(tmp, dest);
+    return { status: 200, bytes: fs.statSync(dest).size, contentType: (res.headers && res.headers.get && res.headers.get('content-type')) || null };
   }
   return last;
 }
@@ -88,7 +123,7 @@ async function fetchFlowDay(job, ctx) {
 }
 
 // ---- runner ---------------------------------------------------------------------------------------------------
-export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages, gzip = false, concurrency = 1 }) {
+export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales.com', token, rpm = 100, fetchImpl = fetch, sleep = sleepDefault, now = () => Date.now(), log = () => {}, maxFlowPages, gzip = false, concurrency = 1, minFreeGb = 0, freeBytes = defaultFreeBytes }) {
   fs.mkdirSync(out, { recursive: true });
   const manifest = path.join(out, 'manifest.jsonl'); const spacing = Math.ceil(60000 / Math.max(1, rpm));
   let lastAt = 0; let pauseUntil = 0;
@@ -100,26 +135,43 @@ export async function runBackfill({ jobs, out, base = 'https://api.unusualwhales
   };
   const ctx = { get, maxFlowPages }; const stopped = new Set(); const stats = {};
   const bump = (ep, k) => { (stats[ep] ||= { ok: 0, empty: 0, skipped: 0, error: 0, limit: 0 })[k]++; };
-  let next = 0;
-  const worker = async () => { for (;;) { const idx = next++; if (idx >= jobs.length) return; await doJob(jobs[idx]); } };
+  let next = 0; let halted = false; let sinceDiskCheck = 24;   // 24 => the very first job triggers a disk check, then every 25 jobs
+  const fails = new Map(); const lastHash = new Map(); const suspects = new Map();
+  const diskOk = () => { if (!minFreeGb) return true; if (++sinceDiskCheck < 25) return true; sinceDiskCheck = 0; const free = freeBytes(out); if (free < minFreeGb * 1e9) { halted = true; log(`STOPPED: only ${(free / 1e9).toFixed(1)} GB free (< ${minFreeGb} GB). Free space or lower --min-free-gb, then re-run to resume.`); return false; } return true; };
+  const worker = async () => { for (;;) { if (halted) return; const idx = next++; if (idx >= jobs.length) return; if (!diskOk()) return; await doJob(jobs[idx]); } };
   async function doJob(j) {
     const f = fileFor(out, j);
     if (stopped.has(j.endpoint)) { bump(j.endpoint, 'limit'); return; }
     // only complete 200 responses are ever written (atomic rename), so existence of either form means "done"
     if (fs.existsSync(f) || fs.existsSync(`${f}.gz`)) { bump(j.endpoint, 'skipped'); return; }
     const requestedAt = new Date(now()).toISOString();
-    const r = j.paged ? await fetchFlowDay(j, ctx) : await get(j.path);
+    let r;
+    if (j.paged) r = await fetchFlowDay(j, ctx);
+    else if (j.kind === 'file') { const slot = Math.max(lastAt + spacing, pauseUntil, now()); lastAt = slot; if (slot - now() > 0) await sleep(slot - now()); r = await downloadFile(j.path, f, { base, token, fetchImpl, sleep, onThrottle: (ms) => { pauseUntil = Math.max(pauseUntil, now() + ms); } }); }
+    else r = await get(j.path);
     const rows = r.rows ?? rowsOf(r.body).length;
     const meta = { endpoint: j.endpoint, ticker: j.ticker || null, date: j.date, path: j.paged ? '/api/option-trades/flow-alerts' : j.path, requestedAt, status: r.status, rows, pages: r.pages ?? 1, truncated: !!r.truncated, error: r.status === 200 ? null : String(r.error || '').slice(0, 200) };
-    if (r.status === 200) { fs.mkdirSync(path.dirname(f), { recursive: true }); const body = JSON.stringify({ meta, data: r.body }); const dest = gzip ? `${f}.gz` : f; const tmp = `${dest}.tmp`; fs.writeFileSync(tmp, gzip ? zlib.gzipSync(body) : body); fs.renameSync(tmp, dest); bump(j.endpoint, rows ? 'ok' : 'empty'); }
+    if (r.status === 200 && j.dateSensitive && rows > 0) {      // a date parameter the API silently ignores returns the SAME payload for every date
+      const h = crypto.createHash('sha1').update(JSON.stringify(r.body)).digest('hex'); const k = `${j.endpoint}|${j.ticker}`; const prev = lastHash.get(k);
+      lastHash.set(k, { h, date: j.date });
+      if (prev && prev.h === h && prev.date !== j.date) { const n = (suspects.get(j.endpoint) || 0) + 1; suspects.set(j.endpoint, n); r = { status: 200, suspect: true, body: null }; if (n >= 5) { stopped.add(j.endpoint); log(`${j.endpoint}: identical payload returned for different dates — the date parameter is being IGNORED. Stopped; files already saved for this endpoint are NOT point-in-time. Delete research-data/backfill/${j.endpoint}.`); } }
+    }
+    if (r.suspect) { meta.status = 200; meta.error = 'suspect_identical_payload'; meta.rows = 0; bump(j.endpoint, 'error'); fs.appendFileSync(manifest, JSON.stringify(meta) + '\n'); return; }
+    if (r.status === 200 && j.kind === 'file') { meta.bytes = r.bytes; meta.contentType = r.contentType; meta.rows = 1; bump(j.endpoint, 'ok'); }
+    else if (r.status === 200) { fs.mkdirSync(path.dirname(f), { recursive: true }); const body = JSON.stringify({ meta, data: r.body }); const dest = gzip ? `${f}.gz` : f; const tmp = `${dest}.tmp`; fs.writeFileSync(tmp, gzip ? zlib.gzipSync(body) : body); fs.renameSync(tmp, dest); bump(j.endpoint, rows ? 'ok' : 'empty'); }
     else bump(j.endpoint, isHistoryLimit(r) ? 'limit' : 'error');
     fs.appendFileSync(manifest, JSON.stringify(meta) + '\n');
+    // fail fast: an endpoint/path this plan does not serve must not burn thousands of calls
+    const fl = fails.get(j.endpoint) || { consec: 0, ok: 0 }; fails.set(j.endpoint, fl);
+    if (r.status === 200) { fl.ok++; fl.consec = 0; } else if (r.status !== 429 && !isHistoryLimit(r)) { fl.consec++; if (fl.consec >= 25 && fl.ok === 0 && !stopped.has(j.endpoint)) { stopped.add(j.endpoint); log(`${j.endpoint}: first ${fl.consec} calls all failed (last HTTP ${r.status} ${meta.error || ''}) — not available on this plan or the path is wrong. Skipped.`); } }
     if (isHistoryLimit(r) && j.date !== 'series') { stopped.add(j.endpoint); log(`${j.endpoint}: history limit reached at ${j.date} (HTTP 403) — older dates for this endpoint skipped`); }
     else if (r.status !== 200) log(`${j.key}: HTTP ${r.status} ${meta.error || ''}`);
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(32, concurrency)) }, worker));
   return stats;
 }
+
+function defaultFreeBytes(dir) { try { fs.mkdirSync(dir, { recursive: true }); const st = fs.statfsSync(dir); return st.bavail * st.bsize; } catch { return Infinity; } }
 
 // ---- probe: what does THIS subscription actually allow? (safe to paste: no token, values truncated) -----------
 export async function probe({ base = 'https://api.unusualwhales.com', token, ticker = 'AAPL', dates, fetchImpl = fetch, sleep = sleepDefault }) {
@@ -141,7 +193,7 @@ export async function probe({ base = 'https://api.unusualwhales.com', token, tic
     ['iv-rank (timeframe=2Y)', `/api/stock/${ticker}/iv-rank?timeframe=2Y`], ['risk-reversal-skew (timeframe=2Y)', `/api/stock/${ticker}/historical-risk-reversal-skew?timeframe=2Y`],
     ['term-structure (date)', `/api/stock/${ticker}/volatility/term-structure?date=${d0}`], ['ohlc 5m (date)', `/api/stock/${ticker}/ohlc/5m?date=${d0}&limit=100`],
     ['option-contracts (date)', `/api/stock/${ticker}/option-contracts?date=${d0}`], ['darkpool (date)', `/api/darkpool/${ticker}?date=${d0}`],
-    ['earnings history', `/api/earnings/${ticker}`],
+    ['earnings history', `/api/earnings/${ticker}`], ['insider trades', `/api/insider/${ticker}`], ['congress trades', `/api/congress/recent-trades?ticker=${ticker}&limit=3`],
   ];
   for (const [label, p] of checks) {
     const r = await get(p);

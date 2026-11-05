@@ -4,12 +4,12 @@
 //   node scripts/uw-backfill.mjs plan   --file research-data/tickers.txt --days 60     how many calls / how long? (no requests)
 //   node scripts/uw-backfill.mjs run    --file research-data/tickers.txt --days 60     download, resumable (re-run to continue)
 //   node scripts/uw-backfill.mjs status                                 progress from the manifest
-// Options: --tickers A,B,C  --from YYYY-MM-DD --to YYYY-MM-DD  --days N  --endpoints flow,tape,oi,series,market  --rpm 100  --concurrency 1  --out research-data/backfill  --no-gzip (default: files are stored gzip-compressed, *.json.gz)
+// Options: --tickers A,B,C  --from YYYY-MM-DD --to YYYY-MM-DD  --days N  --endpoints flow,tape,oi,series,market | extra | everything | fulltape (huge: use --days 5)  --min-free-gb 100  --rpm 100  --concurrency 1  --out research-data/backfill  --no-gzip (default: files are stored gzip-compressed, *.json.gz)
 // The token is never printed or written to disk. Raw responses are stored unchanged and never overwritten.
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadEnvFile } from '../lib/env.js';
-import { tradingDays, buildPlan, runBackfill, probe, summarize, DEFAULT_ENDPOINTS } from '../research/backfill.js';
+import { tradingDays, buildPlan, runBackfill, probe, summarize, DEFAULT_ENDPOINTS, EXTRA_ENDPOINTS } from '../research/backfill.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'), process.env, fs);
 const [cmd = 'help', ...rest] = process.argv.slice(2);
@@ -33,7 +33,8 @@ function tickers() {
 function jobs() {
   const to = flags.to || shift(todayEt, -1);                    // yesterday: today's data is still incomplete
   const from = flags.from || shift(to, -Number(flags.days || 30));
-  const endpoints = flags.endpoints ? flags.endpoints.split(',') : DEFAULT_ENDPOINTS;
+  let endpoints = flags.endpoints ? flags.endpoints.split(',') : DEFAULT_ENDPOINTS;
+  endpoints = endpoints.flatMap((e) => (e === 'extra' ? EXTRA_ENDPOINTS : e === 'everything' ? [...DEFAULT_ENDPOINTS, ...EXTRA_ENDPOINTS] : [e]));   // fulltape is never implied: name it explicitly
   const t = tickers(); if (!t.length) { console.error('No tickers: pass --tickers A,B or --file path.'); process.exit(1); }
   return { t, from, to, endpoints, list: buildPlan({ tickers: t, dates: tradingDays(from, to), endpoints }) };
 }
@@ -52,7 +53,7 @@ if (cmd === 'probe') {
   need();
   const { t, from, to, list } = jobs();
   console.log(`Backfilling ${t.length} tickers, ${from}..${to}, ${list.length} requests at ${rpm}/min → ${out}\nSafe to stop (Ctrl+C) and re-run: finished files are skipped.`);
-  const stats = await runBackfill({ jobs: list, out, base, token, rpm, concurrency: Number(flags.concurrency || 1), gzip: !flags['no-gzip'], log: (m) => console.log(m) });
+  const stats = await runBackfill({ jobs: list, out, base, token, rpm, concurrency: Number(flags.concurrency || 1), minFreeGb: Number(flags['min-free-gb'] || 100), gzip: !flags['no-gzip'], log: (m) => console.log(m) });
   console.log('\nDone.\n' + Object.entries(stats).map(([k, s]) => `${k.padEnd(12)} ok=${s.ok} empty=${s.empty} skipped=${s.skipped} error=${s.error} history-limit=${s.limit}`).join('\n'));
 } else if (cmd === 'status') {
   console.log(summarize(out));

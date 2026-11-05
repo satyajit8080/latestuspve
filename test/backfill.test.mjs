@@ -106,3 +106,52 @@ test('concurrency: every job runs exactly once, rpm budget is shared, and one 42
   assert.ok(sleeps.includes(3000), 'the 429 retry-after was honoured');
   assert.ok(t >= 7 * 1000, 'spacing across workers kept the shared 60/min budget');
 });
+
+import { downloadFile, EXTRA_ENDPOINTS } from '../research/backfill.js';
+
+test('extras: plan includes every opt-in endpoint; fulltape only when named; defaults unchanged', () => {
+  const all = buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03'], endpoints: [...EXTRA_ENDPOINTS, 'fulltape'] });
+  for (const e of ['chain', 'gexlevels-oi', 'gexlevels-vol', 'bars5m', 'darkpool', 'termstructure', 'earnings', 'insider', 'congress', 'fulltape']) assert.ok(all.some((j) => j.endpoint === e), e);
+  assert.ok(!buildPlan({ tickers: ['AAPL'], dates: ['2026-11-03'] }).some((j) => j.endpoint === 'fulltape' || j.endpoint === 'chain'));
+});
+
+test('fail fast: an endpoint that never succeeds is stopped after 25 calls', async () => {
+  const out = tmp(); let n = 0; const logs = [];
+  const fetchImpl = async (u) => { if (u.includes('option-contracts')) { n++; return res(404, { message: 'Route not found' }); } return res(200, { data: [{ x: 1 }] }); };
+  const dates = tradingDays('2026-09-01', '2026-11-03');
+  const jobs = buildPlan({ tickers: ['AAPL', 'MSFT'], dates, endpoints: ['chain', 'tape'] });
+  await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 60000, log: (m) => logs.push(m) });
+  assert.equal(n, 25); assert.ok(logs.some((m) => /chain: first 25 calls all failed/.test(m)));
+});
+
+test('date-sensitive endpoint that ignores the date param is detected, not stored as point-in-time', async () => {
+  const out = tmp(); const logs = [];
+  const fetchImpl = async () => res(200, { data: [{ strike: 100, same: true }] });          // same payload for every date
+  const jobs = buildPlan({ tickers: ['AAPL'], dates: tradingDays('2026-10-01', '2026-11-03'), endpoints: ['chain'] });
+  await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 60000, log: (m) => logs.push(m) });
+  assert.ok(logs.some((m) => /date parameter is being IGNORED/.test(m)));
+  assert.ok(fs.readdirSync(path.join(out, 'chain', 'AAPL')).length <= 1, 'only the first payload could have been stored');
+});
+
+test('downloadFile: streams the body to disk atomically and reports bytes', async () => {
+  const out = tmp(); const dest = path.join(out, 'fulltape', '2026-11-03.bin');
+  const fetchImpl = async () => { const r = new Response('A'.repeat(5000), { status: 200, headers: { 'content-type': 'application/gzip' } }); return r; };
+  const r = await downloadFile('/api/option-trades/full-tape/2026-11-03', dest, { base: 'http://b', token: TOKEN, fetchImpl, sleep: noSleep });
+  assert.equal(r.status, 200); assert.equal(r.bytes, 5000); assert.equal(r.contentType, 'application/gzip');
+  assert.ok(fs.existsSync(dest)); assert.ok(!fs.existsSync(`${dest}.tmp`));
+  const bad = await downloadFile('/x', path.join(out, 'y.bin'), { base: 'http://b', token: TOKEN, fetchImpl: async () => res(403, { code: 'nope' }), sleep: noSleep });
+  assert.equal(bad.status, 403);
+});
+
+test('fulltape job runs through the runner and is resumable; disk guard halts everything', async () => {
+  const out = tmp(); let calls = 0;
+  const fetchImpl = async () => { calls++; return new Response('tape', { status: 200 }); };
+  const jobs = buildPlan({ tickers: [], dates: ['2026-11-03'], endpoints: ['fulltape'] });
+  const s = await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 6000 });
+  assert.equal(s.fulltape.ok, 1); assert.ok(fs.existsSync(path.join(out, 'fulltape', '2026-11-03.bin')));
+  await runBackfill({ jobs, out, token: TOKEN, fetchImpl, sleep: noSleep, rpm: 6000 }); assert.equal(calls, 1);
+  const out2 = tmp(); const logs = []; let c2 = 0;
+  const many = buildPlan({ tickers: ['AAPL'], dates: tradingDays('2026-08-01', '2026-11-03'), endpoints: ['tape'] });
+  await runBackfill({ jobs: many, out: out2, token: TOKEN, fetchImpl: async () => { c2++; return res(200, { data: [{ a: 1 }] }); }, sleep: noSleep, rpm: 60000, freeBytes: () => 1e9, minFreeGb: 50, log: (m) => logs.push(m) });
+  assert.equal(c2, 0, 'no download may start when the disk is below the floor'); assert.ok(logs.some((m) => /STOPPED: only 1.0 GB free/.test(m)));
+});
