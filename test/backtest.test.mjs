@@ -79,3 +79,16 @@ test('end to end: a signal that only explains the PAST move has no forward IC (n
   const rep = run({ planted: 'past' }); const r = rep.results.find((x) => x.feature === 'alertSingle' && x.h === 1);
   assert.ok(Math.abs(r.meanIC) < 0.15, `forward IC should be ~0, got ${r.meanIC}`);
 });
+
+import { compareDailyToBars } from '../research/backtest.js';
+test('compareDailyToBars: detects a daily series that is shifted one day vs the 5-minute bars', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-')); const dates = tradingDays('2026-03-02', '2026-03-27').reverse(); const T = 'AAA';
+  const closes = dates.map((_, i) => 100 + i * 2);                       // distinct closes per day (bars truth)
+  const shifted = (shift) => dates.map((d, i) => ({ date: d, close: String(closes[Math.min(dates.length - 1, Math.max(0, i + shift))]) }));
+  fs.mkdirSync(path.join(dir, 'bars5m', T), { recursive: true });
+  dates.forEach((d, i) => { const [mid] = etDayBounds(d); const end = new Date(Date.parse(mid) + 16 * 3600000).toISOString(); fs.writeFileSync(path.join(dir, 'bars5m', T, `${d}.json`), JSON.stringify({ meta: {}, data: { data: [{ end_time: end, close: String(closes[i]), market_time: 'r' }, { end_time: new Date(Date.parse(mid) + 20 * 3600000).toISOString(), close: '999', market_time: 'po' }] } })); });
+  const write = (rows) => { fs.mkdirSync(path.join(dir, 'ohlc1d', T), { recursive: true }); fs.writeFileSync(path.join(dir, 'ohlc1d', T, 'series.json'), JSON.stringify({ meta: {}, data: { data: rows } })); };
+  write(shifted(0)); let r = compareDailyToBars({ dir, tickers: [T] }); assert.equal(r.same, r.compared); assert.ok(r.compared >= 8);
+  write(shifted(-1)); r = compareDailyToBars({ dir, tickers: [T] }); assert.ok(r.prevDay >= r.compared - 1, JSON.stringify(r));
+  write(shifted(1)); r = compareDailyToBars({ dir, tickers: [T] }); assert.ok(r.nextDay >= r.compared - 1, JSON.stringify(r));
+});

@@ -187,3 +187,30 @@ export function formatReport(rep, { top = 12 } = {}) {
   }
   return lines.join('\n');
 }
+
+// ---- data-quality check: do the daily closes agree with the 5-minute bars' regular-session close? -------------------------
+export function compareDailyToBars({ dir, tickers, maxTickers = 80, tol = 0.003 }) {
+  const out = { tickers: 0, compared: 0, same: 0, prevDay: 0, nextDay: 0, other: 0, medianAbsDiffPct: null, worst: [], marketTime: {} };
+  const diffs = []; const worst = [];
+  for (const t of tickers.slice(0, maxTickers)) {
+    const dp = loadPrices(dir, [t]).get(t); if (!dp) continue;
+    const j = loadJson(path.join(dir, 'ohlc1d', t, 'series.json')); for (const r of rowsOf(j)) { const k = String(r.market_time ?? 'none'); out.marketTime[k] = (out.marketTime[k] || 0) + 1; }
+    let files = []; try { files = fs.readdirSync(path.join(dir, 'bars5m', t)).filter((f) => /^\d{4}-\d{2}-\d{2}\.json/.test(f)); } catch { continue; }
+    const rth = new Map();
+    for (const f of files) {
+      const d = f.slice(0, 10); const cutoff = Date.parse(etDayBounds(d)[0]) + 16 * 3600000; let best = null;
+      for (const b of rowsOf(loadJson(path.join(dir, 'bars5m', t, `${d}.json`)))) { const e = Date.parse(b.end_time || ''); const c = num(b.close); if (Number.isFinite(e) && c > 0 && e <= cutoff && e > cutoff - 24 * 3600000 && (!best || e > best.e)) best = { e, c }; }
+      if (best) rth.set(d, best.c);
+    }
+    let any = false;
+    for (const [d, bc] of rth) {
+      const i = dp.idx.get(d); if (i == null) continue; any = true; const daily = dp.close[i]; const diff = Math.abs(daily / bc - 1); diffs.push(diff); out.compared++;
+      const pv = i > 0 ? rth.get(dp.dates[i - 1]) : null, nx = i + 1 < dp.dates.length ? rth.get(dp.dates[i + 1]) : null;
+      if (diff < tol) out.same++; else if (pv && Math.abs(daily / pv - 1) < tol) out.prevDay++; else if (nx && Math.abs(daily / nx - 1) < tol) out.nextDay++; else out.other++;
+      worst.push({ t, d, daily, bars: bc, diffPct: diff * 100 });
+    }
+    if (any) out.tickers++;
+  }
+  diffs.sort((a, b) => a - b); out.medianAbsDiffPct = diffs.length ? diffs[Math.floor(diffs.length / 2)] * 100 : null;
+  out.worst = worst.sort((a, b) => b.diffPct - a.diffPct).slice(0, 6); return out;
+}
