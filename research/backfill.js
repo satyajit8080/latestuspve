@@ -136,6 +136,12 @@ export async function probe({ base = 'https://api.unusualwhales.com', token, tic
     ['greek-exposure 2Y series', `/api/stock/${ticker}/greek-exposure?timeframe=2Y`], ['ohlc 1d', `/api/stock/${ticker}/ohlc/1d?limit=3`],
     ['historical-risk-reversal-skew', `/api/stock/${ticker}/historical-risk-reversal-skew`], ['iv-rank', `/api/stock/${ticker}/iv-rank`],
     ['market-tide', `/api/market/market-tide?date=${d0}`], ['sector-tide (Technology)', `/api/market/Technology/sector-tide?date=${d0}`],
+    // --- candidates for completeness: does the plan serve these for a PAST date / longer history? ---
+    ['gex-levels (date)', `/api/stock/${ticker}/gex-levels?date=${d0}`], ['greek-exposure/strike (date)', `/api/stock/${ticker}/greek-exposure/strike?date=${d0}`],
+    ['iv-rank (timeframe=2Y)', `/api/stock/${ticker}/iv-rank?timeframe=2Y`], ['risk-reversal-skew (timeframe=2Y)', `/api/stock/${ticker}/historical-risk-reversal-skew?timeframe=2Y`],
+    ['term-structure (date)', `/api/stock/${ticker}/volatility/term-structure?date=${d0}`], ['ohlc 5m (date)', `/api/stock/${ticker}/ohlc/5m?date=${d0}&limit=100`],
+    ['option-contracts (date)', `/api/stock/${ticker}/option-contracts?date=${d0}`], ['darkpool (date)', `/api/darkpool/${ticker}?date=${d0}`],
+    ['earnings history', `/api/earnings/${ticker}`],
   ];
   for (const [label, p] of checks) {
     const r = await get(p);
@@ -143,6 +149,16 @@ export async function probe({ base = 'https://api.unusualwhales.com', token, tic
     const rows = rowsOf(r.body); const first = rows[0] || (r.body && typeof r.body === 'object' ? r.body : null);
     lines.push(`\n${label}: HTTP 200 rows=${rows.length}\n  keys: ${first && typeof first === 'object' ? JSON.stringify(Object.keys(first)) : typeof first}\n  sample: ${short(first)}`);
   }
+  // The full option tape can be hundreds of MB: look at the status, headers and the first bytes ONLY, then abort.
+  try {
+    const ac = new AbortController();
+    const r = await fetchImpl(`${base}/api/option-trades/full-tape/${d0}`, { headers: { Authorization: `Bearer ${token}`, Accept: '*/*' }, signal: ac.signal });
+    const h = (k) => (r.headers && r.headers.get ? r.headers.get(k) : null);
+    let head = '';
+    if (r.ok && r.body && r.body.getReader) { const { value } = await r.body.getReader().read(); head = Buffer.from(value || []).subarray(0, 200).toString('latin1').replace(/[^\x20-\x7e]/g, '.'); ac.abort(); }
+    else if (typeof r.text === 'function') head = String(await r.text()).slice(0, 200);
+    lines.push(`\nfull option tape (${d0}): HTTP ${r.status} type=${h('content-type')} length=${h('content-length')}\n  first bytes: ${head}`);
+  } catch (e) { lines.push(`\nfull option tape: ${e && e.name === 'AbortError' ? 'aborted after first bytes' : 'error'}`); }
   return lines.join('\n');
 }
 
