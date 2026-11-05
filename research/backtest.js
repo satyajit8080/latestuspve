@@ -34,6 +34,10 @@ export function pearson(x, y) {
   return sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : null;
 }
 export const spearman = (x, y) => (x.length >= 3 ? pearson(ranks(x), ranks(y)) : null);
+export function partialSpearman(x, y, z) {            // rank correlation of x and y after removing the rank of z (e.g. yesterday's return)
+  const rx = ranks(x), ry = ranks(y), rz = ranks(z); const xy = pearson(rx, ry), xz = pearson(rx, rz), yz = pearson(ry, rz);
+  if (xy == null || xz == null || yz == null) return null; const den = Math.sqrt((1 - xz * xz) * (1 - yz * yz)); return den > 1e-12 ? (xy - xz * yz) / den : null;
+}
 export const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
 export function sd(a) { if (a.length < 2) return null; const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); }
 export function normInv(p) {                                // Acklam's approximation of the standard normal quantile
@@ -159,30 +163,33 @@ export function evaluate({ rows, horizons = [1, 3, 5], minNames = 30, costBps = 
   for (const f of feats) for (const h of horizons) {
     const days = [];
     for (const d of dates) {
-      const xs = [], ys = [];
-      for (const r of byDate.get(d)) { const x = r.v[f], y = r.y[h]; if (x != null && y != null && Number.isFinite(x)) { xs.push(x); ys.push(y); } }
+      const xs = [], ys = [], px = [], py = [], pm = [];
+      for (const r of byDate.get(d)) {
+        const x = r.v[f], y = r.y[h]; if (x != null && y != null && Number.isFinite(x)) { xs.push(x); ys.push(y); const m = r.v.mom1; if (m != null && Number.isFinite(m)) { px.push(x); py.push(y); pm.push(m); } }
+      }
       if (xs.length < minNames) continue;
-      days.push({ d, ic: spearman(xs, ys), spread: decileSpread(xs, ys), n: xs.length });
+      days.push({ d, ic: spearman(xs, ys), pic: f === 'mom1' || px.length < minNames ? null : partialSpearman(px, py, pm), spread: decileSpread(xs, ys), n: xs.length });
     }
     const valid = days.filter((x) => x.ic != null); if (valid.length < 10) continue;
     const non = valid.filter((_, i) => i % h === 0); const ics = non.map((x) => x.ic); const sdv = sd(ics);
     const t = sdv ? mean(ics) / (sdv / Math.sqrt(ics.length)) : null; const all = valid.map((x) => x.ic); const sdAll = sd(all);
     const half = Math.floor(valid.length / 2); const sp = non.map((x) => x.spread * 1e4);
-    results.push({ feature: f, h, nDays: valid.length, nIndep: non.length, avgNames: Math.round(mean(valid.map((x) => x.n))), meanIC: mean(all), tNonOverlap: t, tNaive: sdAll ? mean(all) / (sdAll / Math.sqrt(all.length)) : null, posDays: valid.filter((x) => x.ic > 0).length / valid.length, icFirstHalf: mean(valid.slice(0, half).map((x) => x.ic)), icSecondHalf: mean(valid.slice(half).map((x) => x.ic)), spreadBps: mean(sp), netSpreadBps: mean(sp) - costBps });
+    const pv = valid.filter((x) => x.pic != null); const pNon = pv.filter((_, i) => i % h === 0).map((x) => x.pic); const pSd = sd(pNon);
+    results.push({ feature: f, h, pIC: pv.length >= 10 ? mean(pv.map((x) => x.pic)) : null, pT: pSd ? mean(pNon) / (pSd / Math.sqrt(pNon.length)) : null, nDays: valid.length, nIndep: non.length, avgNames: Math.round(mean(valid.map((x) => x.n))), meanIC: mean(all), tNonOverlap: t, tNaive: sdAll ? mean(all) / (sdAll / Math.sqrt(all.length)) : null, posDays: valid.filter((x) => x.ic > 0).length / valid.length, icFirstHalf: mean(valid.slice(0, half).map((x) => x.ic)), icSecondHalf: mean(valid.slice(half).map((x) => x.ic)), spreadBps: mean(sp), netSpreadBps: mean(sp) - costBps });
   }
   const nTests = results.length; const thr = nTests ? normInv(1 - alpha / (2 * nTests)) : null;
-  for (const r of results) r.significant = r.tNonOverlap != null && thr != null && Math.abs(r.tNonOverlap) > thr;
+  for (const r of results) { r.significant = r.tNonOverlap != null && thr != null && Math.abs(r.tNonOverlap) > thr; r.significantPartial = r.pT != null && thr != null && Math.abs(r.pT) > thr; }
   return { results, nTests, bonferroniT: thr, nRows: rows.length, nDays: dates.length, firstDate: dates[0], lastDate: dates[dates.length - 1] };
 }
 export function formatReport(rep, { top = 12 } = {}) {
   const f = (v, d = 3) => (v == null ? '   n/a' : v.toFixed(d).padStart(7)); const lines = [];
   lines.push(`Backtest: ${rep.nRows} ticker-days, ${rep.nDays} days (${rep.firstDate}..${rep.lastDate}); ${rep.nTests} tests; Bonferroni |t| threshold = ${rep.bonferroniT ? rep.bonferroniT.toFixed(2) : 'n/a'}`);
-  lines.push('IC = daily cross-sectional Spearman vs close-to-close return from the signal day close. t = non-overlapping days. spread = top minus bottom decile (bps), net of the cost assumption.\n');
+  lines.push("IC = daily cross-sectional Spearman vs close-to-close return from the signal day close. t = non-overlapping days. spread = top minus bottom decile (bps), net of the cost assumption. IC ex-mom1 = same IC after removing the effect of the signal day's own return (1-day reversal).\n");
   for (const h of [...new Set(rep.results.map((r) => r.h))]) {
-    lines.push(`--- horizon ${h} trading day(s) ---`); lines.push('feature            meanIC   t(non-ov)  days  +days%  IC 1st/2nd half     spread  net   sig');
+    lines.push(`--- horizon ${h} trading day(s) ---`); lines.push('feature            meanIC   t(non-ov)  days  +days%  IC 1st/2nd half     spread  net   | IC ex-mom1  t   sig');
     const rs = rep.results.filter((r) => r.h === h && !['mom1', 'mom5', 'random'].includes(r.feature)).sort((a, b) => Math.abs(b.tNonOverlap ?? 0) - Math.abs(a.tNonOverlap ?? 0)).slice(0, top);
     const base = rep.results.filter((r) => r.h === h && ['mom1', 'mom5', 'random'].includes(r.feature));
-    for (const r of [...rs, ...base]) lines.push(`${r.feature.padEnd(18)} ${f(r.meanIC)} ${f(r.tNonOverlap, 2)} ${String(r.nDays).padStart(5)} ${(r.posDays * 100).toFixed(0).padStart(6)}%  ${f(r.icFirstHalf)} /${f(r.icSecondHalf)} ${f(r.spreadBps, 1)} ${f(r.netSpreadBps, 1)}   ${r.significant ? 'YES' : '-'}${['mom1', 'mom5', 'random'].includes(r.feature) ? '  (baseline)' : ''}`);
+    for (const r of [...rs, ...base]) lines.push(`${r.feature.padEnd(18)} ${f(r.meanIC)} ${f(r.tNonOverlap, 2)} ${String(r.nDays).padStart(5)} ${(r.posDays * 100).toFixed(0).padStart(6)}%  ${f(r.icFirstHalf)} /${f(r.icSecondHalf)} ${f(r.spreadBps, 1)} ${f(r.netSpreadBps, 1)}   | ${f(r.pIC)} ${f(r.pT, 2)}   ${r.significant ? 'YES' : r.significantPartial ? 'YES(p)' : '-'}${['mom1', 'mom5', 'random'].includes(r.feature) ? '  (baseline)' : ''}`);
     lines.push('');
   }
   return lines.join('\n');

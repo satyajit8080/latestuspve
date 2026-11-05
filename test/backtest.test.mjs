@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { tradingDays, etDayBounds } from '../research/backfill.js';
-import { ranks, spearman, normInv, alertFeatures, tapeFeatures, oiFeatures, buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate } from '../research/backtest.js';
+import { partialSpearman, ranks, spearman, normInv, alertFeatures, tapeFeatures, oiFeatures, buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate } from '../research/backtest.js';
 
 test('stats: average ranks, spearman, normal quantile', () => {
   assert.deepEqual(ranks([10, 20, 20, 30]), [1, 2.5, 2.5, 4]);
@@ -44,7 +44,12 @@ function synth({ planted }) {
   const dates = tradingDays('2026-01-05', '2026-04-24').reverse(); const tickers = Array.from({ length: 40 }, (_, i) => `T${String(i).padStart(2, '0')}`);
   for (const t of tickers) {
     const X = dates.map(() => gauss()); let px = 100; const closes = [];
-    for (let i = 0; i < dates.length; i++) {
+    if (planted === 'reversal') {                                  // flow reacts to the same-day move; next day the move reverses; no independent flow information
+      let prev = 0; let p2 = 100;                                  // ret_i is the return INTO day i; it reacts to X[i] and reverses part of yesterday's move
+      for (let i = 0; i < dates.length; i++) { const ret = 0.01 * X[i] - 0.5 * prev + 0.002 * gauss(); p2 *= 1 + ret; closes.push(p2); prev = ret; }
+      px = null;
+    }
+    if (px != null) for (let i = 0; i < dates.length; i++) {
       closes.push(px);
       const feat = planted === 'forward' ? X[i] : 0;               // return D -> D+1 depends on today's feature
       const past = planted === 'past' ? X[i + 1] ?? 0 : 0;         // return D -> D+1 depends on TOMORROW's feature (feature observed after the move)
@@ -91,4 +96,15 @@ test('compareDailyToBars: detects a daily series that is shifted one day vs the 
   write(shifted(0)); let r = compareDailyToBars({ dir, tickers: [T] }); assert.equal(r.same, r.compared); assert.ok(r.compared >= 8);
   write(shifted(-1)); r = compareDailyToBars({ dir, tickers: [T] }); assert.ok(r.prevDay >= r.compared - 1, JSON.stringify(r));
   write(shifted(1)); r = compareDailyToBars({ dir, tickers: [T] }); assert.ok(r.nextDay >= r.compared - 1, JSON.stringify(r));
+});
+
+test('partial rank correlation removes a confound', () => {
+  const n = 400; const z = Array.from({ length: n }, (_, i) => Math.sin(i * 1.7) + Math.cos(i * 0.37)); const x = z.map((v, i) => v + 0.3 * Math.sin(i * 5.1)); const y = z.map((v, i) => -v + 0.3 * Math.cos(i * 3.3));
+  assert.ok(spearman(x, y) < -0.7); assert.ok(Math.abs(partialSpearman(x, y, z)) < 0.35);
+});
+
+test('end to end: flow that merely tracks the same-day move shows negative raw IC but ~0 after removing mom1', () => {
+  const rep = run({ planted: 'reversal' }); const r = rep.results.find((x) => x.feature === 'alertSingle' && x.h === 1);
+  assert.ok(r.meanIC < -0.2, `raw IC ${r.meanIC}`); assert.ok(Math.abs(r.pIC) < 0.12, `partial IC ${r.pIC}`);
+  const m = rep.results.find((x) => x.feature === 'mom1' && x.h === 1); assert.ok(m.meanIC < -0.3 && m.pIC == null);
 });
