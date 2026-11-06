@@ -133,14 +133,20 @@ export function buildPanel({ featuresCsv, dir, horizons = HORIZONS }) {
   const y = {}; for (const h of horizons) { y[h] = mk(); for (let t = 0; t < T; t++) for (let d = 0; d + h < D; d++) { const a = close[t * D + d], b = close[t * D + d + h]; if (fin(a) && fin(b) && a > 0) y[h][t * D + d] = b / a - 1; } }
   const mom1 = mk(), mom5 = mk(); for (let t = 0; t < T; t++) for (let d = 1; d < D; d++) { const a = close[t * D + d], b = close[t * D + d - 1]; if (fin(a) && fin(b) && b > 0) mom1[t * D + d] = a / b - 1; if (d >= 5) { const c5 = close[t * D + d - 5]; if (fin(a) && fin(c5) && c5 > 0) mom5[t * D + d] = a / c5 - 1; } }
   cols.set('mom1', mom1); cols.set('mom5', mom5);
-  return { T, D, tickers, dates, cols, y, mom1, sigFirst: dIdx.get(sigDates[0]), sigLast: dIdx.get(lastSig) };
+  // signal range = first/last calendar day inside the feature dates (a feature date without a price day must not break the splits)
+  let sigFirst = dates.findIndex((d) => d >= sigDates[0]); let sigLast = -1; for (let i = dates.length - 1; i >= 0; i--) if (dates[i] <= lastSig) { sigLast = i; break; }
+  if (D === 0 || prices.size === 0 || sigFirst < 0 || sigLast < sigFirst) throw new Error(`no usable calendar: prices for ${prices.size}/${tickers.length} tickers, calendar days ${D}, feature dates ${sigDates[0]}..${lastSig}. Check that research-data/backfill/ohlc1d exists.`);
+  return { T, D, tickers, dates, cols, y, mom1, sigFirst, sigLast };
 }
 export function getSplits(labDir, P, fractions = [0.4, 0.3, 0.3]) {
   const f = path.join(labDir, 'splits.json'); fs.mkdirSync(labDir, { recursive: true });
-  let s; if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, 'utf8'));
-  else {
+  let s; const okSplits = (x) => x && ['explore', 'validate', 'vault'].every((b) => Array.isArray(x[b]) && x[b].length === 2 && x[b].every((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)));
+  if (fs.existsSync(f)) { try { s = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { s = null; } if (!okSplits(s)) s = null; }   // a broken file is rebuilt, never trusted
+  if (!s) {
     const n = P.sigLast - P.sigFirst + 1; const e1 = P.sigFirst + Math.floor(n * fractions[0]) - 1, e2 = e1 + Math.floor(n * fractions[1]);
-    s = { created: new Date().toISOString(), explore: [P.dates[P.sigFirst], P.dates[e1]], validate: [P.dates[e1 + 1], P.dates[e2]], vault: [P.dates[e2 + 1], P.dates[P.sigLast]] }; fs.writeFileSync(f, JSON.stringify(s, null, 1));
+    s = { created: new Date().toISOString(), explore: [P.dates[P.sigFirst], P.dates[e1]], validate: [P.dates[e1 + 1], P.dates[e2]], vault: [P.dates[e2 + 1], P.dates[P.sigLast]] };
+    if (!okSplits(s)) throw new Error(`could not compute the time blocks (signal days ${P.sigFirst}..${P.sigLast} of ${P.D}); need at least ~30 signal days`);
+    fs.writeFileSync(f, JSON.stringify(s, null, 1));
   }
   const at = (d) => { const i = P.dates.indexOf(d); if (i < 0) throw new Error(`split date ${d} not in panel`); return i; };
   return { raw: s, explore: { start: at(s.explore[0]), end: at(s.explore[1]) }, validate: { start: at(s.validate[0]), end: at(s.validate[1]) }, vault: { start: at(s.vault[0]), end: Math.max(at(s.vault[1]), P.sigLast) } };

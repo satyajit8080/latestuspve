@@ -107,3 +107,13 @@ test('llm: retries 429, gives a clear error on failure and on non-JSON replies',
   await assert.rejects(proposeSpecs({ apiKey: '', model: 'm', history: '' }), /OPENROUTER_API_KEY is not set/);
   assert.throws(() => parseSpecs('I think you should buy'), /not valid JSON/); assert.throws(() => parseSpecs('{"a":1}'), /no "specs"/);
 });
+
+test('splits: a feature date without a price day, and a corrupt splits.json, no longer break the lab', () => {
+  const { dir, labDir, csv } = synth();
+  fs.appendFileSync(csv, `S00,2027-01-04,1,1,1,1,1\n`);                              // a feature date far beyond the price data
+  const P = buildPanel({ featuresCsv: csv, dir }); assert.ok(P.sigLast > P.sigFirst && P.sigLast < P.D);
+  fs.writeFileSync(path.join(labDir, 'splits.json'), JSON.stringify({ explore: [null, null], validate: [null, null], vault: [null, null] }));
+  const splits = getSplits(labDir, P); assert.ok(splits.explore.end < splits.validate.start && splits.validate.end < splits.vault.start);
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(JSON.parse(fs.readFileSync(path.join(labDir, 'splits.json'), 'utf8')).explore[0]), 'the broken file was rebuilt');
+  fs.rmSync(path.join(dir, 'ohlc1d'), { recursive: true }); assert.throws(() => buildPanel({ featuresCsv: csv, dir }), /no usable calendar/);
+});
