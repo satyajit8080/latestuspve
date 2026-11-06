@@ -33,3 +33,19 @@ test('service: clear errors for a short prompt, a missing dataset and an LLM tha
   const empty = createLabService({ dir, labDir: `${labDir}-none`, env: { OPENROUTER_API_KEY: 'k' }, fetchImpl: llm([]) });
   await assert.rejects(empty.ask({ prompt: 'anything at all, please' }), /dataset is not built yet/); assert.equal((await empty.status()).dataBuilt, false);
 });
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { exportDataset } from '../research/export.js';
+import { buildPanel, getSplits } from '../research/lab.js';
+test('export: withholds the vault by default, contains no secrets, has checksums and a protocol', () => {
+  const { dir, labDir } = labSynth(); const P = buildPanel({ featuresCsv: path.join(labDir, 'features.csv'), dir }); const s = getSplits(labDir, P); const out = path.join(labDir, '..', 'export');
+  const r = exportDataset({ labDir, dir, out }); assert.equal(r.vaultIncluded, false); assert.equal(r.cutoff, s.raw.validate[1]);
+  const rows = fs.readFileSync(path.join(out, 'features.csv'), 'utf8').split('\n').filter(Boolean).slice(1); assert.ok(rows.length > 1000); assert.ok(rows.every((l) => l.split(',')[1] <= s.raw.validate[1]), 'no vault-period rows');
+  const px = fs.readFileSync(path.join(out, 'prices.csv'), 'utf8').split('\n').filter(Boolean).slice(1); assert.ok(px.every((l) => l.split(',')[1] <= s.raw.validate[1]), 'no vault-period prices');
+  const dict = fs.readFileSync(path.join(out, 'DATA_DICTIONARY.md'), 'utf8'); assert.match(dict, /WITHHELD on purpose/); assert.match(dict, /Timing rules/); assert.ok(fs.readFileSync(path.join(out, 'PROMPT_FOR_AI.md'), 'utf8').includes('"specs"'));
+  const sums = fs.readFileSync(path.join(out, 'SHA256SUMS.txt'), 'utf8'); for (const f of ['features.csv', 'prices.csv', 'DATA_DICTIONARY.md', 'PROMPT_FOR_AI.md']) assert.ok(sums.includes(f));
+  for (const f of fs.readdirSync(out)) assert.ok(!/OPENROUTER|UNUSUAL_WHALES|SESSION_SECRET|DASHBOARD_PASSWORD|sk-or-/.test(fs.readFileSync(path.join(out, f), 'utf8')), `${f} must not contain secrets`);
+  const withV = exportDataset({ labDir, dir, out: `${out}-v`, includeVault: true }); assert.ok(withV.rows > r.rows); assert.equal(withV.vaultIncluded, true);
+  assert.throws(() => exportDataset({ labDir: `${labDir}-none`, dir, out }), /no .*features\.csv/);
+});
