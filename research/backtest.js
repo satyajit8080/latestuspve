@@ -54,20 +54,29 @@ const winsor = (a, lo = 0.01, hi = 0.99) => { if (a.length < 20) return a; const
 
 // ---- feature extractors (one ticker-day) -------------------------------------------------------------------------
 const truthy = (v) => v === true || v === 'true' || v === 1 || v === '1';
-export function alertFeatures(rows, cutoffMs = null) {
+const dayNum = (d) => Date.parse(`${String(d).slice(0, 10)}T12:00:00Z`) / 86400000;
+export function alertFeatures(rows, cutoffMs = null, dateStr = null) {
   let n = 0, raw = 0, single = 0, open = 0, delta = 0, grossSigned = 0, grossAbs = 0;
+  const L = { callAsk: 0, callBid: 0, putAsk: 0, putBid: 0, nSingle: 0, nMulti: 0, flowDteS: 0, flowDteM: 0, flowDteL: 0, flowOtm: 0, flowMid: 0, flowItm: 0, flowSweep: 0, flowFloor: 0, flowRepeat: 0, flowBig: 0 }; let daysToEarn = null;
   for (const a of rows) {
     const t = Date.parse(a.created_at || a.timestamp || ''); if (cutoffMs != null && Number.isFinite(t) && t > cutoffMs) continue;
     const type = String(a.type || a.option_type || '').toLowerCase(); const sgn = type === 'call' ? 1 : type === 'put' ? -1 : 0; if (!sgn) continue;
     const ask = num(a.total_ask_side_prem) ?? 0, bid = num(a.total_bid_side_prem) ?? 0, tot = num(a.total_premium) ?? (ask + bid);
     const flow = ask - bid; n++; raw += sgn * flow; grossSigned += sgn * tot; grossAbs += tot;
     const multi = truthy(a.has_multileg) || (num(a.expiry_count) ?? 1) > 1;
+    if (multi) L.nMulti++;
     if (!multi) {
+      L.nSingle++; if (sgn > 0) { L.callAsk += ask; L.callBid += bid; } else { L.putAsk += ask; L.putBid += bid; }
+      const sf = sgn * flow; const ex = a.expiry ? dayNum(a.expiry) : NaN; const base = dateStr ? dayNum(dateStr) : (Number.isFinite(t) ? Math.floor(t / 86400000) : NaN); const dte = ex - base;
+      if (Number.isFinite(dte)) { if (dte <= 7) L.flowDteS += sf; else if (dte <= 45) L.flowDteM += sf; else L.flowDteL += sf; }
+      const ad = Math.abs(num(a.delta) ?? NaN); if (Number.isFinite(ad)) { if (ad < 0.3) L.flowOtm += sf; else if (ad <= 0.7) L.flowMid += sf; else L.flowItm += sf; }
+      if (truthy(a.has_sweep)) L.flowSweep += sf; if (truthy(a.has_floor)) L.flowFloor += sf; if (String(a.alert_rule || '').startsWith('RepeatedHits')) L.flowRepeat += sf; if (tot >= 100000) L.flowBig += sf;
+      const ne = a.next_earnings_date ? dayNum(a.next_earnings_date) - base : NaN; if (Number.isFinite(ne) && ne >= 0 && (daysToEarn == null || ne < daysToEarn)) daysToEarn = ne;
       single += sgn * flow; const dl = Math.abs(num(a.delta) ?? NaN); if (Number.isFinite(dl)) delta += sgn * flow * dl;
       if (truthy(a.all_opening_trades)) open += sgn * flow;
     }
   }
-  return n ? { nAlerts: n, alertRaw: raw, alertSingle: single, alertOpen: open, alertDelta: delta, grossSigned, grossAbs } : null;
+  return n ? { nAlerts: n, alertRaw: raw, alertSingle: single, alertOpen: open, alertDelta: delta, grossSigned, grossAbs, ...L, daysToEarn } : null;
 }
 export function tapeFeatures(rows, cutoffMs = null) {
   const pick = (r, k) => num(r[k]);
@@ -90,20 +99,22 @@ export function oiFeatures(rows) {
 }
 
 export const FEATURE_COLS = ['nAlerts', 'alertRaw', 'alertSingle', 'alertOpen', 'alertDelta', 'grossSigned', 'grossAbs', 'tapeNetPremSum', 'tapeNetPremLast', 'tapeDeltaSum', 'tapeDeltaLast', 'oiImb', 'oiNetPrem', 'oiAbs'];
+export const LAB_COLS = ['callAsk', 'callBid', 'putAsk', 'putBid', 'nSingle', 'nMulti', 'flowDteS', 'flowDteM', 'flowDteL', 'flowOtm', 'flowMid', 'flowItm', 'flowSweep', 'flowFloor', 'flowRepeat', 'flowBig', 'daysToEarn'];
+const LAB_SET = new Set(LAB_COLS);                                   // building blocks for the AI lab: excluded from the baseline report
 const SIZE_COLS = new Set(['nAlerts', 'grossAbs', 'oiAbs']);          // size/activity measures: kept as columns, not tested as direction
 
 // ---- step 1: raw files -> one feature row per ticker-day (CSV) ---------------------------------------------------------
 export function buildFeatures({ dir, tickers, dates, cutoff = '15:30', out, log = () => {} }) {
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const fd = fs.openSync(out, 'w'); fs.writeSync(fd, `ticker,date,${FEATURE_COLS.join(',')}\n`);
+  const fd = fs.openSync(out, 'w'); const COLS = [...FEATURE_COLS, ...LAB_COLS]; fs.writeSync(fd, `ticker,date,${COLS.join(',')}\n`);
   const [hh, mm] = cutoff.split(':').map(Number); let written = 0, di = 0;
   const get = (ep, t, d) => rowsOf(loadJson(path.join(dir, ep, t, `${d}.json`)));
   for (const date of dates) {
     const cutoffMs = Date.parse(etDayBounds(date)[0]) + (hh * 60 + mm) * 60000;
     for (const t of tickers) {
-      const f = { ...(alertFeatures(get('flow', t, date), cutoffMs) || {}), ...(tapeFeatures(get('tape', t, date), cutoffMs) || {}), ...(oiFeatures(get('oi', t, date)) || {}) };
+      const f = { ...(alertFeatures(get('flow', t, date), cutoffMs, date) || {}), ...(tapeFeatures(get('tape', t, date), cutoffMs) || {}), ...(oiFeatures(get('oi', t, date)) || {}) };
       if (!Object.keys(f).length) continue;
-      fs.writeSync(fd, `${t},${date},${FEATURE_COLS.map((c) => (f[c] == null ? '' : f[c])).join(',')}\n`); written++;
+      fs.writeSync(fd, `${t},${date},${COLS.map((c) => (f[c] == null ? '' : f[c])).join(',')}\n`); written++;
     }
     if (++di % 20 === 0) log(`features: ${di}/${dates.length} days, ${written} rows`);
   }
@@ -151,14 +162,14 @@ export function normalize(rows, win = 20, minHist = 5) {          // value / mea
     }
   }
 }
-function decileSpread(xs, ys) {
+export function decileSpread(xs, ys) {
   const n = xs.length; const k = Math.max(3, Math.floor(n * 0.1)); const order = xs.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
   const yw = winsor(ys); const top = order.slice(n - k).map((i) => yw[i]), bot = order.slice(0, k).map((i) => yw[i]); return mean(top) - mean(bot);
 }
 export function evaluate({ rows, horizons = [1, 3, 5], minNames = 30, costBps = 10, alpha = 0.05 }) {
   const byDate = new Map(); for (const r of rows) { if (!byDate.has(r.date)) byDate.set(r.date, []); byDate.get(r.date).push(r); }
   const dates = [...byDate.keys()].sort();
-  const cols = new Set(); for (const r of rows) for (const k of Object.keys(r.v)) if (!SIZE_COLS.has(k)) cols.add(k);
+  const cols = new Set(); for (const r of rows) for (const k of Object.keys(r.v)) if (!SIZE_COLS.has(k) && !LAB_SET.has(k)) cols.add(k);
   const feats = [...cols].sort(); const results = [];
   for (const f of feats) for (const h of horizons) {
     const days = [];
