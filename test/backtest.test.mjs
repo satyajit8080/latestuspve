@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { tradingDays, etDayBounds } from '../research/backfill.js';
-import { partialSpearman, ranks, spearman, normInv, alertFeatures, tapeFeatures, oiFeatures, buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate } from '../research/backtest.js';
+import { normCdf, primaryVerdict, partialSpearman, ranks, spearman, normInv, alertFeatures, tapeFeatures, oiFeatures, buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate } from '../research/backtest.js';
 
 test('stats: average ranks, spearman, normal quantile', () => {
   assert.deepEqual(ranks([10, 20, 20, 30]), [1, 2.5, 2.5, 4]);
@@ -107,4 +107,11 @@ test('end to end: flow that merely tracks the same-day move shows negative raw I
   const rep = run({ planted: 'reversal' }); const r = rep.results.find((x) => x.feature === 'alertSingle' && x.h === 1);
   assert.ok(r.meanIC < -0.2, `raw IC ${r.meanIC}`); assert.ok(Math.abs(r.pIC) < 0.12, `partial IC ${r.pIC}`);
   const m = rep.results.find((x) => x.feature === 'mom1' && x.h === 1); assert.ok(m.meanIC < -0.3 && m.pIC == null);
+});
+
+test('primary verdict: normal CDF and the pass rule', () => {
+  assert.ok(Math.abs(normCdf(1.96) - 0.975) < 1e-3); assert.ok(Math.abs(normCdf(0) - 0.5) < 1e-6); assert.ok(Math.abs(normCdf(-1.96) - 0.025) < 1e-3);
+  const rep = { results: [{ feature: 'a', h: 1, nDays: 200, nIndep: 200, meanIC: 0.01, tNonOverlap: 2.2, pIC: 0.009, pT: 2, icFirstHalf: 0.01, icSecondHalf: 0.01, netSpreadBps: 1 }, { feature: 'b', h: 1, meanIC: -0.02, tNonOverlap: -3 }, { feature: 'c', h: 1, meanIC: 0.005, tNonOverlap: 1.2 }] };
+  assert.equal(primaryVerdict(rep, 'a', 1).pass, true); assert.equal(primaryVerdict(rep, 'b', 1).pass, false); assert.equal(primaryVerdict(rep, 'c', 1).pass, false); assert.equal(primaryVerdict(rep, 'zzz', 1), null);
+  assert.ok(primaryVerdict(rep, 'a', 1).pTwoSided < 0.05);
 });

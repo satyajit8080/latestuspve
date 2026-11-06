@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // scripts/uw-backtest.mjs — RUN ON THE SERVER, reads research-data/backfill (works on partially downloaded data too).
 //   node scripts/uw-backtest.mjs inspect [TICKER]    show the real field names / one sample per data type (safe to paste)
+//   ... run/evaluate --primary alertSingle:1         also print the verdict for ONE pre-registered hypothesis (feature:horizon)
 //   node scripts/uw-backtest.mjs checkprices         do the daily closes match the 5-minute bars? (data-quality check)
 //   node scripts/uw-backtest.mjs run --from 2026-01-02 [--to YYYY-MM-DD]     build features, then evaluate, print the report
 //   node scripts/uw-backtest.mjs features ...        only build research-data/backtest/features.csv
@@ -10,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { tradingDays } from '../research/backfill.js';
-import { buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate, formatReport, loadJson, rowsOf, compareDailyToBars } from '../research/backtest.js';
+import { buildFeatures, readFeatures, loadPrices, attachLabels, normalize, evaluate, formatReport, loadJson, rowsOf, compareDailyToBars, primaryVerdict } from '../research/backtest.js';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = {}; const pos = [];
@@ -56,6 +57,11 @@ if (cmd === 'checkprices') {
     const labelled = attachLabels(rows, prices, hs); normalize(labelled);
     const rep = evaluate({ rows: labelled, horizons: hs, minNames: Number(flags['min-names'] || 30), costBps: Number(flags['cost-bps'] || 10) });
     const text = formatReport(rep, { top: Number(flags.top || 12) }); console.log('\n' + text);
+    if (flags.primary) {
+      const [pf, ph] = flags.primary.split(':'); const v = primaryVerdict(rep, pf, Number(ph || 1)); const f3 = (x) => (x == null ? 'n/a' : x.toFixed(3));
+      console.log(`\n=== PRE-REGISTERED TEST: ${pf}, ${ph || 1}-day horizon (single hypothesis: IC > 0, pass needs t >= 1.96) ===`);
+      if (!v) console.log('feature/horizon not found in the results'); else console.log(`days ${v.nDays} (independent ${v.nIndep}) | mean IC ${f3(v.meanIC)} | t ${f3(v.t)} | p(two-sided) ${f3(v.pTwoSided)} | IC ex-mom1 ${f3(v.partialIC)} (t ${f3(v.partialT)}) | halves ${f3(v.icFirstHalf)} / ${f3(v.icSecondHalf)} | net decile spread ${v.netSpreadBps == null ? 'n/a' : v.netSpreadBps.toFixed(1)} bps\nVERDICT: ${v.pass ? 'PASS (positive and significant on data not used to pick it)' : 'FAIL (not confirmed)'}`);
+    }
     fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(rep, null, 1)); fs.writeFileSync(path.join(outDir, 'report.txt'), text);
     console.log(`saved ${path.join(outDir, 'report.txt')} and report.json`);
   }

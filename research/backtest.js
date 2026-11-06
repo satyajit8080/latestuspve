@@ -221,3 +221,14 @@ export function compareDailyToBars({ dir, tickers, maxTickers = 80, tol = 0.003 
   diffs.sort((a, b) => a - b); out.medianAbsDiffPct = diffs.length ? diffs[Math.floor(diffs.length / 2)] * 100 : null;
   out.worst = worst.sort((a, b) => b.diffPct - a.diffPct).slice(0, 6); return out;
 }
+
+// ---- pre-registered single hypothesis ---------------------------------------------------------------------------------------
+export function normCdf(z) {                                  // Abramowitz-Stegun 26.2.17
+  const t = 1 / (1 + 0.2316419 * Math.abs(z)); const d = 0.3989423 * Math.exp(-z * z / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))); return z > 0 ? 1 - p : p;
+}
+export function primaryVerdict(rep, feature, h, { tCrit = 1.96 } = {}) {
+  const r = rep.results.find((x) => x.feature === feature && x.h === h); if (!r) return null;
+  const p = r.tNonOverlap == null ? null : 2 * (1 - normCdf(Math.abs(r.tNonOverlap)));
+  return { feature, h, nDays: r.nDays, nIndep: r.nIndep, meanIC: r.meanIC, t: r.tNonOverlap, pTwoSided: p, partialIC: r.pIC, partialT: r.pT, icFirstHalf: r.icFirstHalf, icSecondHalf: r.icSecondHalf, netSpreadBps: r.netSpreadBps, pass: r.meanIC > 0 && r.tNonOverlap != null && r.tNonOverlap >= tCrit };
+}
