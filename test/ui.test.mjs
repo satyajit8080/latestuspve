@@ -148,3 +148,11 @@ test('the scan table has exactly the 13 specified columns, and the primary UI om
   assert.deepEqual(keys, ['rank', 'ticker', 'dir', 'score', 'coverage', 'gates', 'price', 'changePct', 'vsVwapPct', 'rvol', 'oiNet', 'ivr', 'updatedAt']);
   assert.ok(!/v2|shadow|agree|marketBias|scoreDelta/i.test(src.replace(/\/\/.*$/gm, '')), 'primary scan view must not show shadow data');
 });
+
+test('Lab view: no inline styles or colour literals, only /api/lab endpoints, wired into the nav and shortcuts', () => {
+  const src = fs.readFileSync(new URL('../public/views/lab.js', import.meta.url), 'utf8');
+  assert.ok(!/style\s*:/.test(src) && !/#[0-9a-fA-F]{3,8}\b/.test(src) && !/rgba?\(/.test(src), 'no inline style / colour literals');
+  const calls = [...src.matchAll(/api\('([^']+)'/g)].map((m) => m[1]); assert.ok(calls.length >= 4); for (const c of calls) assert.ok(c.startsWith('/api/lab/'), c);
+  assert.ok(!/innerHTML/.test(src), 'AI/user text is rendered as text only');
+  assert.match(fs.readFileSync(new URL('../public/app/main.js', import.meta.url), 'utf8'), /\['lab', 'Lab', 'g l'\]/); assert.match(fs.readFileSync(new URL('../public/ui/palette.js', import.meta.url), 'utf8'), /l: 'lab'/);
+});

@@ -144,3 +144,10 @@ kbd{font-family:var(--font-num);font-size:var(--fs-11);background:var(--bg-3);bo
 .histo i{flex:1;background:var(--info);min-height:1px;height:calc(var(--pct,0)*100%);opacity:.8}
 @media (max-width:767px){.m-hide{display:none}}
 .ledger tr.atm td{background:var(--bg-3)}
+
+/* lab */
+.textarea{width:100%;min-height:84px;padding:var(--s-2);background:var(--bg-2);border:1px solid var(--border-2);border-radius:var(--r-2);color:var(--text-1);font:inherit;resize:vertical}
+.textarea::placeholder{color:var(--text-3)}
+button.chip.pick{height:auto;min-height:18px;padding:2px 8px;cursor:pointer;text-align:left;white-space:normal;background:var(--bg-2)}
+button.chip.pick:hover{background:var(--bg-3);color:var(--text-1)}
+.expr{font-family:var(--font-num);overflow-wrap:anywhere}

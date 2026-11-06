@@ -28,7 +28,9 @@ RULES:
 - Every idea you propose costs statistical power: the significance threshold rises with the number of ideas tried. Prefer few, economically motivated, simple ideas over many random combinations.
 - Do not repeat ideas already in the history. Vary the mechanism (opening vs closing, size, expiry, delta, earnings timing, interaction with price moves, normalisation).
 - Known fact from earlier work: yesterday's return (mom1) strongly predicts a next-day reversal; judge flow ideas by their "IC ex-mom1" too.
-- Ideas are checked later on data you will never see; do not try to tune to the numbers you are shown.`;
+- Ideas are checked later on data you will never see; do not try to tune to the numbers you are shown.
+- If a researcher request is given, implement EXACTLY what they ask first, then at most a few closely related variants. If it cannot be expressed with these columns and operations (for example RSI, news, fundamentals), return {"specs":[],"note":"one sentence on what is missing"}.
+- You may add a one-sentence "note" to the reply to explain how you interpreted the request.`;
 }
 export function parseSpecs(content) {
   let t = String(content || '').trim(); const m = t.match(/```(?:json)?\s*([\s\S]*?)```/); if (m) t = m[1].trim();
@@ -36,9 +38,14 @@ export function parseSpecs(content) {
   let j; try { j = JSON.parse(t); } catch { throw new Error('model reply was not valid JSON'); }
   const arr = Array.isArray(j) ? j : Array.isArray(j.specs) ? j.specs : null; if (!arr) throw new Error('model reply had no "specs" array'); return arr;
 }
-export async function proposeSpecs({ apiKey, model, history, k = 8, fetchImpl = fetch, base = 'https://openrouter.ai/api/v1', timeoutMs = 90000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export function parseReply(content) {
+  const specs = parseSpecs(content); let note = null;
+  try { let t = String(content || '').trim(); const m = t.match(/```(?:json)?\s*([\s\S]*?)```/); if (m) t = m[1].trim(); const a = t.indexOf('{'), b = t.lastIndexOf('}'); const j = JSON.parse(a >= 0 && b > a ? t.slice(a, b + 1) : t); if (j && typeof j.note === 'string') note = j.note.slice(0, 300); } catch { /* note is optional */ }
+  return { specs, note };
+}
+export async function proposeSpecs({ apiKey, model, history, request = null, k = 8, fetchImpl = fetch, base = 'https://openrouter.ai/api/v1', timeoutMs = 90000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set');
-  const body = { model, temperature: 0.8, max_tokens: 3500, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: systemPrompt() }, { role: 'user', content: `${history}\n\nPropose up to ${k} NEW specs now.` }] };
+  const body = { model, temperature: 0.8, max_tokens: 3500, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: systemPrompt() }, { role: 'user', content: request ? `${history}\n\nRESEARCHER REQUEST (their own words, between the markers):\n<<<\n${String(request).slice(0, 1500)}\n>>>\n\nTranslate it into up to ${k} specs now.` : `${history}\n\nPropose up to ${k} NEW specs now.` }] };
   let res, err;
   for (let a = 0; a < 3; a++) {
     const ac = new AbortController(); const to = setTimeout(() => ac.abort(), timeoutMs);
@@ -48,7 +55,7 @@ export async function proposeSpecs({ apiKey, model, history, k = 8, fetchImpl = 
   }
   if (!res || !res.ok) throw new Error(`OpenRouter request failed (${res ? `HTTP ${res.status}` : err})`);
   const j = await res.json(); const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-  const raw = parseSpecs(content); const specs = [], rejected = [];
+  const { specs: raw, note } = parseReply(content); const specs = [], rejected = [];
   for (const r of raw.slice(0, k + 5)) { try { specs.push(validateSpec(r)); } catch (e) { rejected.push({ name: r && r.name, reason: e.message }); } }
-  return { specs: specs.slice(0, k), rejected, usage: j.usage || null, model: j.model || model };
+  return { specs: specs.slice(0, k), note, rejected, usage: j.usage || null, model: j.model || model };
 }

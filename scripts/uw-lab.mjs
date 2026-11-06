@@ -2,6 +2,7 @@
 // scripts/uw-lab.mjs — the AI idea lab (RUN ON THE SERVER; needs the backfill and OPENROUTER_API_KEY in .env for `round`).
 //   features                      build research-data/lab/features.csv for the whole backfill (once; ~20 min)
 //   info                          show the three sealed time blocks and the ledger counts
+//   ask "your request in plain words"   the AI turns your request into tests and runs them on the explore block
 //   round [--k 8] [--rounds 1]    the LLM proposes ideas; they are evaluated on the EXPLORE block only
 //   eval --file specs.json        evaluate ideas you wrote yourself (explore block), no LLM
 //   shortlist                     ideas strong enough on explore to be worth ONE validation
@@ -16,6 +17,7 @@ import { tradingDays } from '../research/backfill.js';
 import { buildFeatures } from '../research/backtest.js';
 import { buildPanel, getSplits, Ledger, runExplore, runValidate, runVault, shortlist, buildHistory, bonferroniT, exprToString } from '../research/lab.js';
 import { proposeSpecs } from '../research/lab-llm.js';
+import { createLabService } from '../research/lab-service.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'), process.env, fs);
 const [cmd = 'help', ...rest] = process.argv.slice(2); const flags = {};
@@ -40,6 +42,12 @@ if (cmd === 'features') {
     for (const x of runExplore({ P, splits, ledger, specs: out.specs, round: `${Date.now()}` })) { if (x.skipped) { console.log(`  (skipped, ${x.skipped})`); continue; } console.log(`  ${row({ name: x.spec.name, horizon: x.spec.horizon, result: x.result })}\n      ${exprToString(x.spec.expr)}  — ${x.spec.hypothesis}`); }
   }
   console.log(`\nIdeas tried on explore: ${ledger.trialCount()}; Bonferroni |t| = ${f3(bonferroniT(Math.max(1, ledger.trialCount())), 2)}. Next: node scripts/uw-lab.mjs shortlist`);
+} else if (cmd === 'ask') {
+  const prompt = rest.filter((x) => !x.startsWith('--')).join(' ').trim(); if (!prompt) { console.error('Usage: node scripts/uw-lab.mjs ask "does opening flow predict 3-day returns?"'); process.exit(1); }
+  const svc = createLabService({ dir, labDir }); const r = await svc.ask({ prompt, k: Number(flags.k || 6) });
+  if (r.note) console.log(`note: ${r.note}`); if (!r.results.length) console.log('The AI produced no testable idea.');
+  for (const x of r.results) console.log(`\n${x.name}  [${x.verdict.level}]${x.repeated ? ' (already tried)' : ''}\n  ${x.expr}${x.filter ? `  only when ${x.filter}` : ''}  h${x.horizon}\n  ${row(x)}\n  ${x.verdict.text}`);
+  console.log(`\nIdeas tried: ${r.trials}; bar for "real": |t| >= ${f3(r.bonferroniT, 2)}`);
 } else if (cmd === 'eval') {
   const { P, splits, ledger } = load(); const specs = JSON.parse(fs.readFileSync(flags.file, 'utf8')); const list = Array.isArray(specs) ? specs : specs.specs;
   for (const x of runExplore({ P, splits, ledger, specs: list, round: 'manual' })) console.log(x.skipped ? `(skipped, ${x.skipped})` : row({ name: x.spec.name, horizon: x.spec.horizon, result: x.result }));

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './lib/env.js';
+import { createLabClient } from './lib/lab-client.js';
 import { toCsv } from './lib/csv.js';
 import { resolveSecrets, LoginThrottle } from './lib/auth.js';
 import { makeOptionsProvider, optionsProviderStatus } from './providers/options.js';
@@ -345,6 +346,22 @@ app.get('/api/journal/resolve/status', requireAuth, (req, res) => res.json({ ok:
 function publicSignal(sig) {
   return { ticker: sig.ticker, finalScore: sig.finalScore, dir: sig.dir, tier: sig.tier, optionsScore: sig.optionsScore, rawScore: sig.rawScore, gated: sig.gated, actionable: sig.actionable, gateReasons: sig.gateReasons, priceGate: sig.priceGate, dataQualityStatus: sig.dataQualityStatus, dataQuality: sig.dataQuality, gexSource: sig.gexSource, ivRank: sig.ivRank, walls: sig.walls, agg: sig.agg ? { gex: sig.agg.gex, gammaFlip: sig.agg.gammaFlip, maxPain: sig.agg.maxPain } : null };
 }
+
+// ---- Lab: describe a test in plain words; the AI turns it into tests; they run on the 2-year dataset (explore block only) ----
+// The heavy work happens in a separate worker process (lib/lab-client.js), never inside this server.
+const lab = createLabClient({ script: process.env.LAB_WORKER_SCRIPT || path.join(__dirname, 'research', 'lab-worker.js'), cwd: __dirname, env: process.env });
+async function labCall(res, type, payload) {
+  try { const data = await lab.call(type, payload); return res.json({ ok: true, ...data }); }
+  catch (e) { const code = e && e.code; return res.status(code === 'BUSY' ? 409 : 200).json({ ok: false, error: String((e && e.message) || 'Lab error').slice(0, 400), code: code || null }); }
+}
+app.get('/api/lab/status', requireAuth, (req, res) => labCall(res, 'status'));
+app.post('/api/lab/ask', requireAuth, (req, res) => {
+  const prompt = typeof req.body.prompt === 'string' ? req.body.prompt.trim() : ''; const k = Number.isInteger(req.body.k) ? Math.min(10, Math.max(1, req.body.k)) : 6;
+  if (prompt.length < 8 || prompt.length > 1500) return res.status(400).json({ ok: false, error: 'Write between 8 and 1500 characters about what you want tested.' });
+  return labCall(res, 'ask', { prompt, k });
+});
+app.post('/api/lab/validate', requireAuth, (req, res) => labCall(res, 'validate'));
+app.post('/api/lab/vault', requireAuth, (req, res) => (req.body && req.body.confirm === true ? labCall(res, 'vault', { confirm: true }) : res.status(400).json({ ok: false, error: 'Opening the vault needs confirm: true.' })));
 
 app.get('/api/_monitor', requireAuth, (req, res) => res.json({
   optionsEngineVersion: OPTIONS_ENGINE_VERSION, v2Version: V2_VERSION, primary: PROMOTION.primary,

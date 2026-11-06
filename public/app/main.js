@@ -15,12 +15,13 @@ import { renderTicker } from '../views/ticker.js';
 import { renderJournal } from '../views/journal.js';
 import { renderShadow } from '../views/shadow.js';
 import { renderSystem } from '../views/system.js';
+import { renderLab } from '../views/lab.js';
 import { adaptScanRows } from '../adapt/scanRow.js';
 import { diffRows } from '../ui/table-diff.js';
 
 const root = document.getElementById('root');
 let cal = { holidays: [], halfDays: [] }, poller = null, view = null, bar = null, inspector = null, appShell = null, clockTimer = 0, tickTimer = 0, reauth = null, lastRoute = null;
-const NAV = [['scan', 'Scan', 'g s'], ['t', 'Ticker', 'g t'], ['journal', 'Journal', 'g j'], ['shadow', 'Shadow', 'g h'], ['system', 'System', 'g y']];
+const NAV = [['scan', 'Scan', 'g s'], ['t', 'Ticker', 'g t'], ['journal', 'Journal', 'g j'], ['lab', 'Lab', 'g l'], ['shadow', 'Shadow', 'g h'], ['system', 'System', 'g y']];
 
 function applyDensity() {
   const coarse = matchMedia('(pointer: coarse)').matches;
@@ -126,6 +127,7 @@ function route(r) {
   if (r.view === 'scan') view = renderScan(mainEl, ctx);
   else if (r.view === 't') view = renderTicker(mainEl, { ticker: r.param ? r.param.toUpperCase() : null, cal });
   else if (r.view === 'journal') view = renderJournal(mainEl, ctx);
+  else if (r.view === 'lab') view = renderLab(mainEl);
   else if (r.view === 'shadow') view = renderShadow(mainEl);
   else if (r.view === 'system') view = renderSystem(mainEl, { cal, runScan });
   else navigate(buildHash('scan'));

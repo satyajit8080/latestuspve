@@ -216,8 +216,16 @@ export function runVault({ P, splits, ledger, force = false, minNames = 30 }) {
   return out;
 }
 // what the LLM may see: EXPLORE results only (never validate or vault), the number of trials so far and the current threshold
-export function buildHistory(ledger, { top = 15 } = {}) {
+export function verdictFor(result, nTrials) {
+  const t = result && result.t; if (t == null) return { level: 'unknown', text: 'not enough data to judge' };
+  const bar = bonferroniT(Math.max(1, nTrials)); const same = sgn(result.icFirstHalf) === sgn(t) && sgn(result.icSecondHalf) === sgn(t) && result.pT != null && sgn(result.pT) === sgn(t);
+  if (Math.abs(t) >= bar && same) return { level: 'strong', text: `clears the multiple-testing bar (|t| ${Math.abs(t).toFixed(1)} >= ${bar.toFixed(1)}); still needs the validate block` };
+  if (Math.abs(t) >= 2.5 && same) return { level: 'promising', text: `|t| ${Math.abs(t).toFixed(1)}; consistent in both halves and after removing yesterday's move; worth one validation` };
+  return { level: 'noise', text: `|t| ${Math.abs(t).toFixed(1)} is below 2.5 or not consistent; treat as noise (bar for ${nTrials} ideas is ${bar.toFixed(1)})` };
+}
+export function buildHistory(ledger, { top = 15, summaryOnly = false } = {}) {
   const ex = ledger.byBlock('explore'); const n = ex.length; const thr = bonferroniT(Math.max(1, n)); const f = (v, d = 3) => (v == null ? 'n/a' : v.toFixed(d));
+  if (summaryOnly) return { trials: n, bonferroniT: thr, text: `Ideas tried so far on the explore block: ${n}. Current Bonferroni |t| threshold: ${f(thr, 2)}.` };
   const rows = ex.slice().sort((a, b) => Math.abs(b.result.t ?? 0) - Math.abs(a.result.t ?? 0)).slice(0, top).map((e) => `- ${e.name} | h=${e.horizon} | ${exprToString(e.expr)}${e.filter ? ` | filter ${exprToString(e.filter)}` : ''} | IC ${f(e.result.meanIC)} t ${f(e.result.t, 2)} | IC ex-mom1 ${f(e.result.pIC)} t ${f(e.result.pT, 2)} | halves ${f(e.result.icFirstHalf)}/${f(e.result.icSecondHalf)}`);
   return { trials: n, bonferroniT: thr, text: n ? `Ideas tried so far on the explore block: ${n}. Current Bonferroni |t| threshold: ${f(thr, 2)}.\nBest so far (by |t|):\n${rows.join('\n')}` : 'No ideas tried yet.' };
 }
