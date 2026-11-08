@@ -90,9 +90,9 @@ test('adapter: today\'s scan row and the planned row map to the same view model;
 });
 
 test('router: hash round trip', () => {
-  assert.deepEqual(parseHash('#/t/NVDA'), { view: 't', param: 'NVDA', query: {} });
-  assert.deepEqual(parseHash('#/journal?tab=evaluation&min=80'), { view: 'journal', param: null, query: { tab: 'evaluation', min: '80' } });
-  assert.equal(parseHash('').view, 'scan');
+  assert.deepEqual(parseHash('#/t/NVDA'), { view: 't', param: 'NVDA', rest: [], query: {} });
+  assert.deepEqual(parseHash('#/journal?tab=evaluation&min=80'), { view: 'journal', param: null, rest: [], query: { tab: 'evaluation', min: '80' } });
+  assert.equal(parseHash('').view, 'scan'); assert.deepEqual(parseHash('#/intel/t/NVDA'), { view: 'intel', param: 't', rest: ['NVDA'], query: {} });
   assert.equal(buildHash('scan', null, { min: '70', q: '' }), '#/scan?min=70');
 });
 

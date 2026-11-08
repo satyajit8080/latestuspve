@@ -22,6 +22,7 @@ export function flowFeatures(alerts) {
   return { n: alerts.length, nSingle: single.length, nMulti: multi.length, totalPremium: total, singlePremium: singlePrem, multiPremium: multiPrem, callPremium: callPrem, putPremium: putPrem, callAsk, callBid, putAsk, putBid, signedPremium: signed,
     imbalance: gross > 0 ? clamp(signed / gross, -1, 1) : null, openingShare: singlePrem > 0 ? openPrem / singlePrem : null, sweepShare: total > 0 ? sum(alerts.filter((a) => a.sweep), (a) => a.premium) / total : null, largeShare: total > 0 ? sum(alerts.filter((a) => a.premium >= 500000), (a) => a.premium) / total : null,
     multiLegShare: total > 0 ? multiPrem / total : null, unusualCount: alerts.filter((a) => a.volOi != null && a.volOi >= 1 && a.opening && !a.multileg).length, callPutRatio: putPrem > 0 ? callPrem / putPrem : null, daysToEarnings,
+    dteWeighted: (() => { let w = 0, a = 0; for (const x of alerts) { const d = x.expiry && x.ts ? Math.round((Date.parse(`${x.expiry}T12:00:00Z`) - Date.parse(`${etDate(x.ts)}T12:00:00Z`)) / 86400000) : null; if (d != null && d >= 0 && x.premium > 0) { w += x.premium; a += x.premium * d; } } return w > 0 ? a / w : null; })(),
     lastAlertAt: alerts[alerts.length - 1].ts, spot: [...alerts].reverse().map((a) => a.spot).find(isNum) ?? null, marketCap: alerts.map((a) => a.marketCap).find(isNum) ?? null, sector: alerts.map((a) => a.sector).find(Boolean) ?? null,
     topPrints: [...alerts].sort((a, b) => b.premium - a.premium).slice(0, 10) };
 }

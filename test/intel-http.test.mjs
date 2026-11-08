@@ -15,7 +15,7 @@ const B = 'http://127.0.0.1:4320';
 const cookie = (await fetch(B + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"password":"intel-test-password-1"}' })).headers.get('set-cookie').split(';')[0];
 const get = (p, h = {}) => fetch(B + p, { headers: { cookie, ...h } }); const post = (p, b = {}) => fetch(B + p, { method: 'POST', headers: { 'Content-Type': 'application/json', cookie }, body: JSON.stringify(b) });
 
-test('intel routes require sign-in', async () => { for (const [m, p] of [['GET', '/api/intel/status'], ['GET', '/api/intel/latest'], ['GET', '/api/intel/ticker/AAPL'], ['POST', '/api/intel/scan'], ['POST', '/api/intel/ticker/AAPL/refresh'], ['GET', '/api/intel/endpoints'], ['GET', '/api/intel/snapshots']]) assert.equal((await fetch(B + p, { method: m })).status, 401, p); });
+test('intel routes require sign-in', async () => { for (const [m, p] of [['GET', '/api/intel/status'], ['GET', '/api/intel/latest'], ['GET', '/api/intel/ticker/AAPL'], ['POST', '/api/intel/scan'], ['POST', '/api/intel/ticker/AAPL/refresh'], ['GET', '/api/intel/endpoints'], ['GET', '/api/intel/snapshots'], ['GET', '/api/intel/flow']]) assert.equal((await fetch(B + p, { method: m })).status, 401, p); });
 test('before any scan: honest empty states, no fabricated data, scan refuses without a provider', async () => {
   const st = await (await get('/api/intel/status')).json(); assert.equal(st.ok, true); assert.equal(st.configured, false); assert.equal(st.latest, null); assert.equal(st.snapshots.count, 0);
   const l = await (await get('/api/intel/latest')).json(); assert.equal(l.available, false); assert.deepEqual(l.rows, []);
@@ -29,6 +29,7 @@ test('after a scan: latest (with ETag), snapshot, ticker detail, status counts a
   assert.equal((await get('/api/intel/latest', { 'if-none-match': r.headers.get('etag') })).status, 304);
   const snaps = await (await get('/api/intel/snapshots')).json(); assert.equal(snaps.snapshots.length, 1); const h = await (await get(`/api/intel/latest?snapshot=${snaps.snapshots[0].date}/${snaps.snapshots[0].time}`)).json(); assert.equal(h.mode, 'HISTORICAL'); assert.equal(h.historical, true);
   assert.equal((await (await get('/api/intel/latest?snapshot=../../etc/passwd')).json()).historical, false);
+  const fl = await (await get('/api/intel/flow')).json(); assert.equal(fl.available, true); assert.ok(fl.alerts.length > 0 && fl.alerts[0].premium >= fl.alerts[fl.alerts.length - 1].premium); assert.match(fl.note, /not proof of intent/);
   const deepT = j.rows.find((x) => x.deep).ticker; const d = await (await get(`/api/intel/ticker/${deepT}`)).json(); assert.equal(d.available, true); assert.ok(d.detail.evaluation.bull.components.length === 5 && d.detail.levels);
   const st = await (await get('/api/intel/status')).json(); assert.equal(st.snapshots.count, 1); assert.ok(st.latest.counts.rows === 4);
 });

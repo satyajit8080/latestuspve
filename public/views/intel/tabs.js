@@ -1,0 +1,1 @@
+export const INTEL_TABS = [['scanner', 'Market Scanner'], ['flow', 'Unusual Options Flow'], ['gex', 'GEX & Gamma Levels'], ['positioning', 'Institutional Positioning'], ['volatility', 'Volatility Intelligence'], ['top', 'Top Opportunities'], ['backtest', 'Strategy Backtesting']];

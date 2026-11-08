@@ -37,13 +37,13 @@ export function installShortcuts({ palette, help, go, focusSearch }) {
     if (typing || e.metaKey || e.ctrlKey || e.altKey || dialogOpen()) return;
     if (e.key === '/') { e.preventDefault(); focusSearch(); return; }
     if (e.key === '?') { e.preventDefault(); help(); return; }
-    if (chord) { const map = { s: 'scan', t: 't', j: 'journal', l: 'lab', h: 'shadow', y: 'system' }; const v = map[e.key]; chord = null; clearTimeout(chordTimer); if (v) { e.preventDefault(); go(v); } return; }
+    if (chord) { const map = { s: 'scan', t: 't', j: 'journal', l: 'lab', i: 'intel', h: 'shadow', y: 'system' }; const v = map[e.key]; chord = null; clearTimeout(chordTimer); if (v) { e.preventDefault(); go(v); } return; }
     if (e.key === 'g') { chord = 'g'; chordTimer = setTimeout(() => { chord = null; }, 1200); }
   });
 }
 export function shortcutSheet() {
   const row = (k, t) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', { class: 'muted' }, t));
   openDialog({ title: 'Keyboard shortcuts', body: h('table', { class: 'ledger' }, h('tbody', {},
-    row('g s', 'Scan'), row('g t', 'Ticker'), row('g j', 'Journal'), row('g l', 'Lab (ask the AI to test ideas)'), row('g h', 'Shadow (research)'), row('g y', 'System'),
+    row('g s', 'Scan'), row('g t', 'Ticker'), row('g j', 'Journal'), row('g i', 'Options Intelligence'), row('g l', 'Lab (ask the AI to test ideas)'), row('g h', 'Shadow (research)'), row('g y', 'System'),
     row('/', 'Focus ticker search'), row('Ctrl/⌘ K', 'Command palette'), row('j / k  ↑ / ↓', 'Move through table rows'), row('Enter', 'Open row'), row('Space', 'Preview row'), row('Esc', 'Close preview / dialog'), row('?', 'This sheet'))) });
 }

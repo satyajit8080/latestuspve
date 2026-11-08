@@ -10,7 +10,7 @@ import { explain } from './explain.js';
 import { sessionOf, dataMode } from './session.js';
 import { ENGINE_VERSION } from './endpoints.js';
 import { etDate } from '../../lib/time.js';
-import { writeLatest, writeDeep, writeSnapshot } from '../../store/intel-store.js';
+import { writeLatest, writeDeep, writeSnapshot, writeFlow } from '../../store/intel-store.js';
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const shiftDay = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 
@@ -20,7 +20,7 @@ export async function screenTicker(adapter, ticker, { nowMs = Date.now() } = {})
   if (!F) return { ticker, quiet: true, sessionDate: date, retrievedAt: r.retrievedAt, alerts: [] };
   const activity = Math.log10(1 + F.totalPremium) * (0.5 + Math.abs(F.imbalance ?? 0));
   return { ticker, deep: false, sessionDate: date, retrievedAt: r.retrievedAt, price: F.spot, sector: F.sector, marketCap: F.marketCap, totalPremium: F.totalPremium, callPremium: F.callPremium, putPremium: F.putPremium, imbalance: round(F.imbalance), openingShare: round(F.openingShare), sweepShare: round(F.sweepShare), multiLegShare: round(F.multiLegShare),
-    unusualCount: F.unusualCount, nAlerts: F.n, lastAlertAt: F.lastAlertAt, daysToEarnings: F.daysToEarnings, activity: round(activity, 3), alerts: sess, schemaMissing: r.schemaMissing };
+    unusualCount: F.unusualCount, dte: round(F.dteWeighted, 1), nAlerts: F.n, lastAlertAt: F.lastAlertAt, daysToEarnings: F.daysToEarnings, activity: round(activity, 3), alerts: sess, schemaMissing: r.schemaMissing };
 }
 
 export async function analyzeTicker(adapter, ticker, { nowMs = Date.now(), prefetchedFlow = null, experimental = false } = {}) {
@@ -38,7 +38,7 @@ export async function analyzeTicker(adapter, ticker, { nowMs = Date.now(), prefe
   let exp = null; if (experimental) { const [ml, st] = await Promise.all([adapter.fetch('multiLeg', ticker), adapter.fetch('optionStance', ticker)]); exp = { multiLeg: { ok: ml.ok, error: ml.error || null, rows: ml.json ? (Array.isArray(ml.json) ? ml.json : (ml.json.data || [])).slice(0, 50) : [] }, optionStance: { ok: st.ok, error: st.error || null, data: st.ok ? st.json : null }, note: 'Experimental: these endpoint paths come from documentation we could not verify live. They never affect a score.' }; }
   const asOf = price && price.asOf ? price.asOf : (flow ? flow.lastAlertAt : null); const top = ev.direction ? ev[ev.direction] : (ev.bull.score >= ev.bear.score ? ev.bull : ev.bear);
   const row = { ticker, deep: true, name: info ? info.name : null, sector: (info && info.sector) || (flow && flow.sector) || null, marketCap: (info && info.marketCap) || (flow && flow.marketCap) || null, price: price ? round(price.price, 2) : (flow ? flow.spot : null), chgPct: price ? round(price.chgPct) : null,
-    state: ev.state, direction: ev.direction, score: top.score, bullScore: ev.bull.score, bearScore: ev.bear.score, reasons: ev.reasons, imbalance: flow ? round(flow.imbalance) : null, callPremium: flow ? flow.callPremium : null, putPremium: flow ? flow.putPremium : null, totalPremium: flow ? flow.totalPremium : null, openingShare: flow ? round(flow.openingShare) : null, sweepShare: flow ? round(flow.sweepShare) : null,
+    state: ev.state, direction: ev.direction, score: top.score, bullScore: ev.bull.score, bearScore: ev.bear.score, reasons: ev.reasons, imbalance: flow ? round(flow.imbalance) : null, callPremium: flow ? flow.callPremium : null, putPremium: flow ? flow.putPremium : null, totalPremium: flow ? flow.totalPremium : null, openingShare: flow ? round(flow.openingShare) : null, sweepShare: flow ? round(flow.sweepShare) : null, multiLegShare: flow ? round(flow.multiLegShare) : null, dte: flow ? round(flow.dteWeighted, 1) : null, marketCapOk: true,
     unusualCount: flow ? flow.unusualCount : null, nAlerts: flow ? flow.n : 0, regime: gex ? gex.regime : null, netGamma: gex ? gex.netGamma : null, gammaFlip: gex ? gex.gammaFlip : null, callWall: gex ? gex.callWall : null, putWall: gex ? gex.putWall : null, gexApproaching: gex ? gex.approaching : [], ivRank: vol ? round(vol.ivRank, 1) : null, iv: vol ? round(vol.iv) : null, rv20: vol ? round(vol.rv20) : null, termSlope: vol ? round(vol.termSlope) : null, impliedMovePct: vol ? round(vol.impliedMovePct) : null, rr25: vol ? round(vol.rr25) : null,
     rvol: price ? round(price.rvol, 2) : null, vsVwapPct: price ? round(price.vsVwapPct) : null, liquidity: liquidity ? liquidity.level : null, atmSpreadPct: liquidity ? round(liquidity.atmSpreadPct) : null, oiImbalance: oi ? round(oi.imbalance) : null, oiCallChange: oi ? oi.callChange : null, oiPutChange: oi ? oi.putChange : null, volOiHits: oi ? oi.volOiHits : null, daysToEarnings: flow ? flow.daysToEarnings : null,
     support: lv2 ? (lv2.support[0] || null) : null, resistance: lv2 ? (lv2.resistance[0] || null) : null, target1: lv2 && lv2.targets[0] ? lv2.targets[0] : null, invalidation: lv2 ? lv2.invalidation : null, riskReward: lv2 ? lv2.riskReward : null, lastAlertAt: flow ? flow.lastAlertAt : null, signalAt: nowMs, retrievedAt: nowMs, asOf, mode: dataMode({ nowMs, asOfMs: nowMs }), why: ex.why.slice(0, 3) };
@@ -62,6 +62,7 @@ export async function runIntelScan({ adapter, universe, deepN = 60, minPremium =
     }
   }
   await Promise.all(Array.from({ length: concurrency }, w1));
+  try { const all = []; for (const [t, al] of flowOf) for (const a of al) all.push({ ticker: t, ts: a.ts, right: a.right, strike: a.strike, expiry: a.expiry, premium: a.premium, side: a.side, volOi: a.volOi, volume: a.volume, openInterest: a.openInterest, sweep: a.sweep, floor: a.floor, opening: a.opening, multileg: a.multileg, rule: a.rule, spot: a.spot, delta: a.delta }); all.sort((x, y) => y.premium - x.premium); writeFlow(outDir, { generatedAt: new Date(nowMs).toISOString(), count: all.length, alerts: all.slice(0, 500) }); } catch { /* the flow page shows an empty state */ }
   const cand = rows.filter((r) => isNum(r.activity) && r.totalPremium >= minPremium); const half = Math.ceil(deepN / 2);
   const pos = cand.filter((r) => r.imbalance > 0).sort((a, b) => b.activity - a.activity), neg = cand.filter((r) => r.imbalance <= 0).sort((a, b) => b.activity - a.activity);
   let pick = [...pos.slice(0, half), ...neg.slice(0, half)]; if (pick.length < deepN) pick = [...pick, ...cand.filter((r) => !pick.includes(r)).sort((a, b) => b.activity - a.activity).slice(0, deepN - pick.length)];

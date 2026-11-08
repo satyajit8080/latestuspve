@@ -16,12 +16,14 @@ import { renderJournal } from '../views/journal.js';
 import { renderShadow } from '../views/shadow.js';
 import { renderSystem } from '../views/system.js';
 import { renderLab } from '../views/lab.js';
+import { renderIntel } from '../views/intel/index.js';
+import { INTEL_TABS } from '../views/intel/tabs.js';
 import { adaptScanRows } from '../adapt/scanRow.js';
 import { diffRows } from '../ui/table-diff.js';
 
 const root = document.getElementById('root');
 let cal = { holidays: [], halfDays: [] }, poller = null, view = null, bar = null, inspector = null, appShell = null, clockTimer = 0, tickTimer = 0, reauth = null, lastRoute = null;
-const NAV = [['scan', 'Scan', 'g s'], ['t', 'Ticker', 'g t'], ['journal', 'Journal', 'g j'], ['lab', 'Lab', 'g l'], ['shadow', 'Shadow', 'g h'], ['system', 'System', 'g y']];
+const NAV = [['scan', 'Scan', 'g s'], ['t', 'Ticker', 'g t'], ['journal', 'Journal', 'g j'], ['intel', 'Options Intelligence', 'g i'], ['lab', 'Lab', 'g l'], ['shadow', 'Shadow', 'g h'], ['system', 'System', 'g y']];
 
 function applyDensity() {
   const coarse = matchMedia('(pointer: coarse)').matches;
@@ -97,7 +99,7 @@ function showReauth() {
 }
 
 function buildShell() {
-  const nav = h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.map(([k, label, keys]) => h('a', { href: buildHash(k), dataset: { view: k }, class: k === 'shadow' ? 'm-hide' : '' }, h('span', { class: 'label' }, label), h('span', { class: 'k' }, keys))),
+  const nav = h('nav', { class: 'nav', 'aria-label': 'Primary' }, NAV.flatMap(([k, label, keys]) => [h('a', { href: buildHash(k), dataset: { view: k }, class: k === 'shadow' ? 'm-hide' : '' }, h('span', { class: 'label' }, label), h('span', { class: 'k' }, keys)), k === 'intel' ? h('div', { class: 'subnav', role: 'group', 'aria-label': 'Options Intelligence' }, INTEL_TABS.map(([t, l]) => h('a', { href: `#/intel/${t}`, dataset: { view: 'intel-sub', tab: t } }, h('span', { class: 'label' }, l)))) : null]),
     h('span', { class: 'sp' }),
     h('button', { class: 'desk-only', onclick: () => setPref('nav', state.prefs.nav === 'rail' ? 'full' : 'rail'), 'aria-label': 'Collapse navigation' }, h('span', { class: 'label' }, 'Collapse')),
     h('button', { class: 'm-hide', onclick: () => shortcutSheet() }, h('span', { class: 'label' }, 'Shortcuts'), h('span', { class: 'k' }, '?')),
@@ -122,11 +124,12 @@ function route(r) {
   lastRoute = r;
   if (!shell) return;
   if (view && view.destroy) view.destroy(); view = null; inspector.hide();
-  for (const a of shell.querySelectorAll('.nav a')) { const on = a.dataset.view === r.view; if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
+  for (const a of shell.querySelectorAll('.nav a')) { const on = a.dataset.view === 'intel-sub' ? (r.view === 'intel' && (r.param || 'scanner') === a.dataset.tab) : a.dataset.view === r.view; if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
   const ctx = { query: r.query, cal, runScan, inspector, refresh: () => pollSignals(true) };
   if (r.view === 'scan') view = renderScan(mainEl, ctx);
   else if (r.view === 't') view = renderTicker(mainEl, { ticker: r.param ? r.param.toUpperCase() : null, cal });
   else if (r.view === 'journal') view = renderJournal(mainEl, ctx);
+  else if (r.view === 'intel') view = renderIntel(mainEl, { param: r.param, rest: r.rest || [], query: r.query });
   else if (r.view === 'lab') view = renderLab(mainEl);
   else if (r.view === 'shadow') view = renderShadow(mainEl);
   else if (r.view === 'system') view = renderSystem(mainEl, { cal, runScan });

@@ -5,7 +5,7 @@ export function parseHash(hash) {
   const seg = path.split('/').filter(Boolean);
   const query = Object.fromEntries(new URLSearchParams(qs));
   const view = seg[0] || 'scan';
-  return { view, param: seg[1] ? decodeURIComponent(seg[1]) : null, query };
+  return { view, param: seg[1] ? decodeURIComponent(seg[1]) : null, rest: seg.slice(2).map(decodeURIComponent), query };
 }
 export const buildHash = (view, param, query) => {
   const q = new URLSearchParams(Object.entries(query || {}).filter(([, v]) => v !== '' && v != null)).toString();

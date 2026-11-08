@@ -151,3 +151,33 @@ kbd{font-family:var(--font-num);font-size:var(--fs-11);background:var(--bg-3);bo
 button.chip.pick{height:auto;min-height:18px;padding:2px 8px;cursor:pointer;text-align:left;white-space:normal;background:var(--bg-2)}
 button.chip.pick:hover{background:var(--bg-3);color:var(--text-1)}
 .expr{font-family:var(--font-num);overflow-wrap:anywhere}
+
+/* options intelligence */
+.subnav{display:flex;flex-direction:column;gap:1px;margin:0 0 var(--s-1) var(--s-3);border-left:1px solid var(--border-1)}
+.nav .subnav a{height:26px;padding-left:var(--s-3);font-size:var(--fs-12)}
+#app[data-nav="rail"] .subnav{display:none}
+.tabs.intel{display:flex;gap:var(--s-1);flex-wrap:wrap;margin-bottom:var(--s-3)}
+.tabs.intel a{padding:4px var(--s-3);border:1px solid var(--border-2);border-radius:var(--r-2);color:var(--text-2);background:var(--bg-2)}
+.tabs.intel a[aria-current="page"]{background:var(--bg-3);color:var(--text-1);border-color:var(--info)}
+.intel-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2);margin-bottom:var(--s-3)}
+.intel-head .grow{flex:1}
+.chart{width:100%;height:auto;display:block}
+.chart .grid{stroke:var(--border-1)} .chart .zero{stroke:var(--border-2)} .chart .hl{stroke-dasharray:4 3;stroke-width:1} .chart .hl.c-bull{stroke:var(--bull)} .chart .hl.c-bear{stroke:var(--bear)} .chart .hl.c-gate{stroke:var(--gated)} .chart .hl.c-dim{stroke:var(--text-3)} .chart .hl.c-info{stroke:var(--info)}
+.chart text{font-size:var(--fs-11);font-family:var(--font-num);fill:var(--text-3)}
+.chart text.c-bull{fill:var(--bull)} .chart text.c-bear{fill:var(--bear)} .chart text.c-gate{fill:var(--gated)} .chart text.c-info{fill:var(--info)}
+.chart .ln{fill:none;stroke-width:1.6} .chart .ln.c-bull{stroke:var(--bull)} .chart .ln.c-bear{stroke:var(--bear)} .chart .ln.c-info{stroke:var(--info)} .chart .ln.c-gate{stroke:var(--gated)} .chart .ln.c-dim{stroke:var(--text-3)}
+.chart .bar.c-bull{fill:var(--bull)} .chart .bar.c-bear{fill:var(--bear)} .chart .bar.c-info{fill:var(--info)} .chart .bar.c-dim{fill:var(--text-3)} .chart .bar.c-gate{fill:var(--gated)}
+.legend{display:flex;gap:var(--s-3);flex-wrap:wrap;font-size:var(--fs-11);color:var(--text-2)} .legend i{display:inline-block;width:10px;height:3px;margin-right:4px;vertical-align:middle;background:var(--text-3)} .legend i.c-bull{background:var(--bull)} .legend i.c-bear{background:var(--bear)} .legend i.c-info{background:var(--info)}
+.heat{display:grid;gap:1px;align-items:stretch;font-size:var(--fs-11)}
+.heat .hd{color:var(--text-3);padding:2px 4px;text-align:center} .heat .rowh{color:var(--text-2);padding:2px 6px;text-align:right}
+.heat .cell{min-height:22px;display:flex;align-items:center;justify-content:center;background:var(--bg-1);color:var(--text-1)}
+.heat .cell.pos{background:color-mix(in srgb,var(--bull) calc(var(--i) * 75%),var(--bg-1))} .heat .cell.neg{background:color-mix(in srgb,var(--bear) calc(var(--i) * 75%),var(--bg-1))}
+.contrib{display:grid;grid-template-columns:minmax(150px,1.2fr) 70px 1fr;gap:var(--s-2);align-items:center;padding:3px 0;border-bottom:1px solid var(--border-1)}
+.contrib .barwrap{display:block;height:8px;margin-bottom:2px;background:var(--bg-2);border-radius:var(--r-1);position:relative;overflow:hidden}
+.contrib .barwrap i{position:absolute;top:0;bottom:0;left:0;width:calc(var(--pct) * 1%);background:var(--bull)} .contrib.bearside .barwrap i{background:var(--bear)} .contrib .barwrap i.neg{background:var(--gated)}
+.opp{display:grid;grid-template-columns:1fr;gap:var(--s-2);align-content:start} .oppcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:var(--s-3)}
+.oppcard{border:1px solid var(--border-1);border-radius:var(--r-2);background:var(--bg-1);padding:var(--s-3);display:grid;gap:var(--s-2)}
+.oppcard.bull{border-left:3px solid var(--bull)} .oppcard.bear{border-left:3px solid var(--bear)}
+.oppcard h3{display:flex;gap:var(--s-2);align-items:baseline;flex-wrap:wrap}
+.hint{color:var(--text-3);font-size:var(--fs-11)}
+.field{display:flex;flex-direction:column;gap:2px} .field label{font-size:var(--fs-11);color:var(--text-3)}

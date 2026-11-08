@@ -9,6 +9,7 @@ import { MIN_FLOW_PREMIUM } from './features.js';
 export const WEIGHTS = { flow: 30, oi: 12, gex: 15, price: 20, volume: 8 };
 export const SCORE_VERSION = 'intel-score-0.1.0 (prior weights, unvalidated)';
 export const THRESHOLDS = { enter: 55, margin: 12, maxSpread: 0.15, earningsBlockDays: 2, minPriceEvidence: 0.1 };
+const usd = (x) => (x >= 1e6 ? `$${(x / 1e6).toFixed(1)}M` : `$${Math.round(x / 1000)}k`);
 const LABELS = { flow: 'Options flow (premium imbalance, tape, opening activity)', oi: 'Open-interest confirmation', gex: 'Dealer positioning (GEX, walls, flip)', price: 'Price action and confirmation', volume: 'Relative volume' };
 
 function flowEvidence(F, T, s) {
@@ -19,7 +20,7 @@ function flowEvidence(F, T, s) {
   const wsum = members.reduce((a, m) => a + m.w, 0); let e = members.reduce((a, m) => a + m.e * m.w, 0) / wsum;
   const quality = clamp(0.5 + 0.5 * (F.openingShare ?? 0), 0.5, 1) * (F.multiLegShare != null && F.multiLegShare > 0.6 ? 0.7 : 1);   // opening activity raises confidence; spread-dominated flow lowers it
   e *= quality * sizeScale;
-  return { e, members, note: `single-leg premium $${Math.round(F.singlePremium / 1000)}k, opening ${F.openingShare != null ? Math.round(F.openingShare * 100) + '%' : 'n/a'}, multi-leg ${F.multiLegShare != null ? Math.round(F.multiLegShare * 100) + '%' : 'n/a'}${sizeScale < 1 ? ' (small size: scaled down)' : ''}` };
+  return { e, members, note: `single-leg premium ${usd(F.singlePremium)}, opening ${F.openingShare != null ? Math.round(F.openingShare * 100) + '%' : 'n/a'}, multi-leg ${F.multiLegShare != null ? Math.round(F.multiLegShare * 100) + '%' : 'n/a'}${sizeScale < 1 ? ' (small size: scaled down)' : ''}` };
 }
 function oiEvidence(O, s) { if (!O || O.imbalance == null) return null; const e = clamp(s * O.imbalance / 0.5, -1, 1) * (O.volOiHits > 0 ? 1 : 0.7); return { e, members: [{ k: 'Call minus put OI change', value: O.imbalance, e, w: 1 }], note: `OI change published after the prior session; ${O.volOiHits} contract(s) with volume above OI` }; }
 function gexEvidence(G, P, s) {
