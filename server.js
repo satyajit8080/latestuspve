@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './lib/env.js';
 import { createLabClient } from './lib/lab-client.js';
+import { registerIntelRoutes } from './lib/intel-routes.js';
 import { toCsv } from './lib/csv.js';
 import { resolveSecrets, LoginThrottle } from './lib/auth.js';
 import { makeOptionsProvider, optionsProviderStatus } from './providers/options.js';
@@ -347,6 +348,8 @@ function publicSignal(sig) {
   return { ticker: sig.ticker, finalScore: sig.finalScore, dir: sig.dir, tier: sig.tier, optionsScore: sig.optionsScore, rawScore: sig.rawScore, gated: sig.gated, actionable: sig.actionable, gateReasons: sig.gateReasons, priceGate: sig.priceGate, dataQualityStatus: sig.dataQualityStatus, dataQuality: sig.dataQuality, gexSource: sig.gexSource, ivRank: sig.ivRank, walls: sig.walls, agg: sig.agg ? { gex: sig.agg.gex, gammaFlip: sig.agg.gammaFlip, maxPain: sig.agg.maxPain } : null };
 }
 
+// ---- Options Intelligence (US stocks only; no Indian-market code paths) ----
+const INTEL = registerIntelRoutes(app, { requireAuth, provider: OPT_PROVIDER, limiter: UW_LIMITER, legacyScanRunning: () => !!SCAN_STATE.running, scanScript: path.join(__dirname, 'research', 'intel-scan.js'), env: process.env, cwd: __dirname });
 // ---- Lab: describe a test in plain words; the AI turns it into tests; they run on the 2-year dataset (explore block only) ----
 // The heavy work happens in a separate worker process (lib/lab-client.js), never inside this server.
 const lab = createLabClient({ script: process.env.LAB_WORKER_SCRIPT || path.join(__dirname, 'research', 'lab-worker.js'), cwd: __dirname, env: process.env });

@@ -17,6 +17,7 @@ export const INTEL_ENDPOINTS = {
   bars5m: { verified: true, path: (t) => `/api/stock/${enc(t)}/ohlc/5m?limit=200`, expect: ['start_time', 'open', 'high', 'low', 'close', 'volume'] },
   contracts: { verified: true, path: (t) => `/api/stock/${enc(t)}/option-contracts`, expect: ['option_symbol', 'delta', 'gamma', 'implied_volatility', 'volume', 'open_interest', 'nbbo_bid', 'nbbo_ask'] },
   info: { verified: true, path: (t) => `/api/stock/${enc(t)}/info`, expect: [] },
+  screener: { verified: true, path: () => '/api/screener/stocks?limit=500', expect: ['ticker'] },
   marketTide: { verified: true, path: () => '/api/market/market-tide', expect: ['timestamp', 'net_call_premium', 'net_put_premium', 'net_volume'] },
   multiLeg: { verified: false, path: (t) => `/api/option-trades/multi-leg?ticker_symbol=${enc(t)}&limit=50`, expect: [] },
   optionStance: { verified: false, path: (t) => `/api/stock/${enc(t)}/option-stance`, expect: [] },
