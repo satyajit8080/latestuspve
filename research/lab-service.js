@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildPanel, getSplits, Ledger, runExplore, runValidate, runVault, shortlist, bonferroniT, exprToString, verdictFor, buildHistory, specId } from './lab.js';
 import { proposeSpecs } from './lab-llm.js';
+import { backtest as runBacktest, StrategyBook, PRESETS } from './strategy-bt.js';
+import { exprToString as _e } from './lab.js';
 
 export function createLabService({ dir, labDir, env = process.env, fetchImpl = fetch }) {
   const csv = path.join(labDir, 'features.csv'); let st = null; const ledger = new Ledger(labDir);
@@ -14,7 +16,13 @@ export function createLabService({ dir, labDir, env = process.env, fetchImpl = f
     const P = buildPanel({ featuresCsv: csv, dir }); st = { P, splits: getSplits(labDir, P) }; return st;
   }
   const brief = (e, n) => ({ id: e.id, name: e.name, hypothesis: e.hypothesis, horizon: e.horizon, expr: exprToString(e.expr), filter: e.filter ? exprToString(e.filter) : null, result: e.result, verdict: verdictFor(e.result, n) });
+  const book = new StrategyBook(labDir);
   return {
+    async presets() { return { presets: PRESETS.map((p) => ({ key: p.key, name: p.name, note: p.note, horizon: p.horizon, side: p.side, topPct: p.topPct, signal: _e(p.signal), filter: p.filter ? _e(p.filter) : null })) }; },
+    async strategy({ preset, strategy, confirmOos } = {}) {
+      const base = preset ? PRESETS.find((p) => p.key === preset) : strategy; if (!base) { const e = new Error('Unknown preset.'); e.code = 'BAD_PRESET'; throw e; }
+      const { P, splits } = load(); return runBacktest({ P, splits, book, raw: { costBps: 10, ...base, ...(strategy && preset ? strategy : {}) }, confirmOos: confirmOos === true });
+    },
     async status() {
       const ex = ledger.byBlock('explore'); const n = ex.length; let blocks = null; try { blocks = JSON.parse(fs.readFileSync(path.join(labDir, 'splits.json'), 'utf8')); } catch { /* not created yet */ }
       return { dataBuilt: fs.existsSync(csv), loaded: !!st, keyConfigured: !!env.OPENROUTER_API_KEY, model: model(), blocks: blocks && { explore: blocks.explore, validate: blocks.validate, vault: blocks.vault }, trials: n, bonferroniT: bonferroniT(Math.max(1, n)), validated: ledger.byBlock('validate').length, vaultOpened: !!ledger.vaultOpened(),

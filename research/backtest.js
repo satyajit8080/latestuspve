@@ -130,8 +130,8 @@ export function readFeatures(csv) {
 export function loadPrices(dir, tickers) {
   const out = new Map();
   for (const t of tickers) {
-    const j = loadJson(path.join(dir, 'ohlc1d', t, 'series.json')); const rows = rowsOf(j).map((r) => ({ d: String(r.date || '').slice(0, 10), c: num(r.close) })).filter((r) => r.d && r.c > 0).sort((a, b) => (a.d < b.d ? -1 : 1));
-    if (rows.length > 10) out.set(t, { dates: rows.map((r) => r.d), close: rows.map((r) => r.c), idx: new Map(rows.map((r, i) => [r.d, i])) });
+    const j = loadJson(path.join(dir, 'ohlc1d', t, 'series.json')); const rows = rowsOf(j).map((r) => ({ d: String(r.date || '').slice(0, 10), c: num(r.close), h: num(r.high), l: num(r.low), v: num(r.volume ?? r.total_volume) })).filter((r) => r.d && r.c > 0).sort((a, b) => (a.d < b.d ? -1 : 1));
+    if (rows.length > 10) out.set(t, { dates: rows.map((r) => r.d), close: rows.map((r) => r.c), high: rows.map((r) => r.h), low: rows.map((r) => r.l), volume: rows.map((r) => r.v), idx: new Map(rows.map((r, i) => [r.d, i])) });
   }
   return out;
 }

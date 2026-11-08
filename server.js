@@ -363,6 +363,8 @@ app.post('/api/lab/ask', requireAuth, (req, res) => {
   if (prompt.length < 8 || prompt.length > 1500) return res.status(400).json({ ok: false, error: 'Write between 8 and 1500 characters about what you want tested.' });
   return labCall(res, 'ask', { prompt, k });
 });
+app.get('/api/intel/backtest/presets', requireAuth, (req, res) => labCall(res, 'presets'));
+app.post('/api/intel/backtest/run', requireAuth, (req, res) => { const b = req.body || {}; return labCall(res, 'strategy', { preset: typeof b.preset === 'string' ? b.preset : undefined, strategy: b.strategy && typeof b.strategy === 'object' ? b.strategy : undefined, confirmOos: b.confirmOos === true }); });
 app.post('/api/lab/validate', requireAuth, (req, res) => labCall(res, 'validate'));
 app.post('/api/lab/vault', requireAuth, (req, res) => (req.body && req.body.confirm === true ? labCall(res, 'vault', { confirm: true }) : res.status(400).json({ ok: false, error: 'Opening the vault needs confirm: true.' })));
 

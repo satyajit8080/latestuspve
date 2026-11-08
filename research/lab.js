@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { ranks, spearman, partialSpearman, mean, sd, normInv, num, decileSpread, loadPrices, FEATURE_COLS, LAB_COLS } from './backtest.js';
+import { ranks, spearman, partialSpearman, mean, sd, normInv, num, decileSpread, loadPrices, loadJson, rowsOf as rowsOfJson, FEATURE_COLS, LAB_COLS } from './backtest.js';
 
 // ---- the expression language -----------------------------------------------------------------------------------------------
 export const LIMITS = { maxDepth: 6, maxNodes: 25, maxWin: 60, maxLag: 20 };
@@ -82,6 +82,7 @@ export const COLUMN_DOC = {
   flowDteS: 'signed single-leg flow, expiries <= 7 days', flowDteM: 'signed single-leg flow, expiries 8-45 days', flowDteL: 'signed single-leg flow, expiries > 45 days', flowOtm: 'signed single-leg flow, |delta| < 0.3', flowMid: 'signed single-leg flow, |delta| 0.3-0.7', flowItm: 'signed single-leg flow, |delta| > 0.7',
   flowSweep: 'signed single-leg flow, sweeps only', flowFloor: 'signed single-leg flow, floor trades only', flowRepeat: 'signed single-leg flow, repeated-hit alerts only', flowBig: 'signed single-leg flow, alerts with premium >= $100k', daysToEarn: 'days until the next earnings date (smallest across the day\'s alerts; missing if unknown)',
   mom1: "the signal day's own return (close vs previous close)", mom5: 'return over the previous 5 days',
+  rvol: "the signal day's volume divided by the average of the previous 20 days", rv20: 'realized volatility over 20 days (annualized)', ret5: '5-day return', ret20: '20-day return', brk20: '+1 if the close is above the prior 20-day closing high, -1 if below the prior 20-day low, else 0', gexNet: "net gamma exposure (call + put) as of the PREVIOUS day's end (lagged one day)",
 };
 export const COLUMNS = Object.keys(COLUMN_DOC);
 
@@ -133,6 +134,25 @@ export function buildPanel({ featuresCsv, dir, horizons = HORIZONS }) {
   const y = {}; for (const h of horizons) { y[h] = mk(); for (let t = 0; t < T; t++) for (let d = 0; d + h < D; d++) { const a = close[t * D + d], b = close[t * D + d + h]; if (fin(a) && fin(b) && a > 0) y[h][t * D + d] = b / a - 1; } }
   const mom1 = mk(), mom5 = mk(); for (let t = 0; t < T; t++) for (let d = 1; d < D; d++) { const a = close[t * D + d], b = close[t * D + d - 1]; if (fin(a) && fin(b) && b > 0) mom1[t * D + d] = a / b - 1; if (d >= 5) { const c5 = close[t * D + d - 5]; if (fin(a) && fin(c5) && c5 > 0) mom5[t * D + d] = a / c5 - 1; } }
   cols.set('mom1', mom1); cols.set('mom5', mom5);
+  // ---- point-in-time columns derived from the daily bars and the 2-year gamma series (all known at the close of the signal day) ----
+  const vol = mk(), rvol = mk(), rv20 = mk(), ret5 = mk(), ret20 = mk(), brk20 = mk(), gexNet = mk();
+  for (const [tk, p] of prices) { const t = tIdx.get(tk); for (let i = 0; i < p.dates.length; i++) { const d = dIdx.get(p.dates[i]); if (d != null && fin(p.volume[i])) vol[t * D + d] = p.volume[i]; } }
+  for (let t = 0; t < T; t++) {
+    const b = t * D;
+    for (let d = 1; d < D; d++) {
+      const c = close[b + d]; if (!fin(c)) continue;
+      let sv = 0, nv = 0; for (let k = Math.max(0, d - 20); k < d; k++) { const v = vol[b + k]; if (fin(v)) { sv += v; nv++; } } if (nv >= 10 && fin(vol[b + d]) && sv > 0) rvol[b + d] = vol[b + d] / (sv / nv);
+      if (d >= 5 && fin(close[b + d - 5]) && close[b + d - 5] > 0) ret5[b + d] = c / close[b + d - 5] - 1; if (d >= 20 && fin(close[b + d - 20]) && close[b + d - 20] > 0) ret20[b + d] = c / close[b + d - 20] - 1;
+      if (d >= 21) { const r = []; for (let k = d - 19; k <= d; k++) { const a = close[b + k], q = close[b + k - 1]; if (fin(a) && fin(q) && q > 0) r.push(Math.log(a / q)); } if (r.length >= 15) { const m = r.reduce((x, y) => x + y, 0) / r.length; rv20[b + d] = Math.sqrt(r.reduce((x, y) => x + (y - m) ** 2, 0) / (r.length - 1)) * Math.sqrt(252); } }
+      if (d >= 21) { let hi = -Infinity, lo = Infinity, n = 0; for (let k = d - 20; k < d; k++) { const q = close[b + k]; if (fin(q)) { hi = Math.max(hi, q); lo = Math.min(lo, q); n++; } } if (n >= 15) brk20[b + d] = c > hi ? 1 : c < lo ? -1 : 0; }
+    }
+  }
+  for (const tk of tickers) {                                    // gamma series: the value dated D is an end-of-day estimate, so it is used from D+1 on (lagged one day)
+    const j = loadJson(path.join(dir, 'gex', tk, 'series.json')); const rows = rowsOfJson(j); if (!rows.length) continue; const t = tIdx.get(tk); const byDate = new Map();
+    for (const r of rows) { const cg = num(r.call_gamma), pg = num(r.put_gamma); if (cg != null && pg != null && r.date) byDate.set(String(r.date).slice(0, 10), cg + pg); }
+    for (let d = 1; d < D; d++) { const v = byDate.get(dates[d - 1]); if (v != null) gexNet[t * D + d] = v; }
+  }
+  for (const [k, a] of [['rvol', rvol], ['rv20', rv20], ['ret5', ret5], ['ret20', ret20], ['brk20', brk20], ['gexNet', gexNet]]) cols.set(k, a);
   // signal range = first/last calendar day inside the feature dates (a feature date without a price day must not break the splits)
   let sigFirst = dates.findIndex((d) => d >= sigDates[0]); let sigLast = -1; for (let i = dates.length - 1; i >= 0; i--) if (dates[i] <= lastSig) { sigLast = i; break; }
   if (D === 0 || prices.size === 0 || sigFirst < 0 || sigLast < sigFirst) throw new Error(`no usable calendar: prices for ${prices.size}/${tickers.length} tickers, calendar days ${D}, feature dates ${sigDates[0]}..${lastSig}. Check that research-data/backfill/ohlc1d exists.`);

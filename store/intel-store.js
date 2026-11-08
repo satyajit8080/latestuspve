@@ -21,3 +21,5 @@ export function listSnapshots(dir) {
   return out;
 }
 export function readSnapshot(file) { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(file)).toString('utf8')); } catch { return null; } }
+export function writeFlow(dir, obj) { atomic(path.join(dir, 'flow.json'), JSON.stringify(obj)); }
+export function readFlow(dir) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'flow.json'), 'utf8')); } catch { return null; } }
