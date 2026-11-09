@@ -35,8 +35,8 @@ export function renderBacktest(host) {
     btn.disabled = true; mount(out, h('p', { class: 'muted' }, 'Running…'));
     try {
       const base = presets.find((q) => q.key === sel.value);
-      const r = await api('/api/intel/backtest/run', { method: 'POST', body: { preset: base && base.key, strategy: { horizon: Number(horizon.value), side: side.value, topPct: Number(topPct.value), costBps: Number(cost.value) }, confirmOos: oos.checked } });
-      if (!alive) return; if (!r.ok) throw new Error(r.error || 'failed'); show(r);
+      const res = await api('/api/intel/backtest/run', { method: 'POST', body: { preset: base && base.key, strategy: { horizon: Number(horizon.value), side: side.value, topPct: Number(topPct.value), costBps: Number(cost.value) }, confirmOos: oos.checked } });
+      const r = res.data || {}; if (!alive) return; if (!res.ok || !r.ok) throw new Error(r.error || 'Backtest failed (is the server restarted?)'); show(r);
     } catch (e) { if (alive) { mount(out, h('div', { class: 'banner err', role: 'alert' }, e.message)); toast(e.message); } } finally { btn.disabled = false; }
   }
   const form = h('section', { class: 'panel' }, h('header', {}, h('h2', {}, 'Strategy Backtesting')), h('div', { class: 'body stack' },
@@ -44,7 +44,7 @@ export function renderBacktest(host) {
     h('div', { class: 'filters' }, sel, horizon, side, h('label', {}, 'Top/bottom % ', topPct), h('label', {}, 'Cost bps/side ', cost)), note,
     h('label', {}, oos, ' Open out-of-sample (one look only)'), h('div', {}, btn)));
   mount(host, h('div', { class: 'stack' }, form, out));
-  api('/api/intel/backtest/presets').then((r) => { if (!alive) return; if (!r.ok) throw new Error(r.error || 'failed'); presets = r.presets; sel.replaceChildren(...presets.map((p) => h('option', { value: p.key }, p.name))); pick(); })
+  api('/api/intel/backtest/presets').then((res) => { const r = res.data || {}; if (!alive) return; if (!res.ok || !r.ok) { const e = new Error(r.error || 'Backtest API not found (restart the server after git pull)'); e.code = r.code; throw e; } presets = r.presets; sel.replaceChildren(...presets.map((p) => h('option', { value: p.key }, p.name))); pick(); })
     .catch((e) => { if (alive) mount(out, h('div', { class: 'banner err', role: 'alert' }, e.code === 'NO_DATA' || /not built/.test(e.message) ? 'Lab dataset not built yet: run node scripts/uw-lab.mjs features on the server.' : e.message)); });
   return { destroy() { alive = false; } };
 }
